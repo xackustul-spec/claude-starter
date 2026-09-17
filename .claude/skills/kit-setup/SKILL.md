@@ -49,7 +49,7 @@ disable-model-invocation: true
 | `.claude/rules|agents|skills|hooks/*` | скопировать | одноимённый файл не заменять: показать разницу, спросить |
 | `docs/ai/*` | скопировать | не заменять; недостающие файлы добавить |
 | `gitignore.starter` | строки, которых нет, дописать в `.gitignore` (создать, если нет) | то же |
-| `STARTER.md`, `AUDIT-PROMPT.md` | скопировать | — |
+| `STARTER.md`, `SEARCH.md`, `AUDIT-PROMPT.md` | скопировать | — |
 | `README.md`, `INSTALL.md`, `.git/`, `inbox/`, `VERSION`, `CHANGELOG.md` набора | не копировать | не копировать |
 | `README.md` проекта | не трогать | не трогать |
 
