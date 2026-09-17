@@ -525,10 +525,48 @@ INSTR_RE = re.compile(r'(^|/)(CLAUDE(\.local|\.starter)?\.md|AGENTS\.md|\.mcp\.j
 PROTECT_RE = re.compile(r'(^|/)\.claude/(hooks/|settings[\w.]*\.json$)|(^|/)\.claude\.json$', re.I)
 
 
+LOCAL_SETTINGS_RE = re.compile(r'(^|/)\.claude/settings\.local\.json$', re.I)
+SAFE_MODES = {'default', 'acceptEdits', 'plan'}
+
+
+def local_settings_ok(text, root):
+    # Личный файл доверия Claude пишет сам, если в нём только профиль: доверие, режим, стиль ответов.
+    try:
+        data = json.loads(text)
+    except Exception:
+        return False
+    if not isinstance(data, dict) or set(data) - {'env', 'permissions', 'outputStyle'}:
+        return False
+    env = data.get('env') or {}
+    if not isinstance(env, dict) or set(env) - {'CLAUDE_TRUST_LEVEL'}:
+        return False
+    perms = data.get('permissions') or {}
+    if not isinstance(perms, dict) or set(perms) - {'defaultMode'} or (perms.get('defaultMode') not in SAFE_MODES
+                                                                      and 'defaultMode' in perms):
+        return False
+    if str(env.get('CLAUDE_TRUST_LEVEL', '')).lower() == 'full':
+        # «полное» должно стоять в паспорте — иначе это самовольное повышение прав.
+        try:
+            prof = open(os.path.join(root, 'docs', 'ai', 'PROFILE.md'), encoding='utf-8-sig').read()
+        except Exception:
+            return False
+        m = TRUST_RE.search(prof)
+        if not m or m.group(1).lower() != 'полное':
+            return False
+    return True
+
+
 def guard_instructions(data):
-    path = str((data.get('tool_input') or {}).get('file_path') or '').replace('\\', '/')
+    ti = data.get('tool_input') or {}
+    path = str(ti.get('file_path') or '').replace('\\', '/')
     if not path or not INSTR_RE.search(path):
         return
+    if LOCAL_SETTINGS_RE.search(path):
+        text = ti.get('content')
+        if text is not None and local_settings_ok(str(text), project_dir(data)):
+            return
+        ask('Изменение личных настроек (' + path + '). Показать владельцу, что меняется, и получить «да» — '
+            'сам Claude пишет туда только доверие из PROFILE.md, режим правок и стиль ответов, целиком файлом (Write).')
     if PROTECT_RE.search(path):
         ask('Изменение защит набора — разрешений или хуков (' + path + '). Покажите владельцу, что меняется, '
             'и получите «да».')
@@ -850,6 +888,23 @@ def stamp_state(root, top):
 
 
 # ------------------------------------------------------------- session-start
+TRUST_RE = re.compile(r'Доверие:\s*(осторожное|обычное|полное)', re.I)
+
+
+def trust_notice(root):
+    # Профиль в PROFILE.md обещает полное доверие, а хуки его не видят (нет settings.local.json).
+    try:
+        txt = open(os.path.join(root, 'docs', 'ai', 'PROFILE.md'), encoding='utf-8-sig').read()
+    except Exception:
+        return ''
+    m = TRUST_RE.search(txt)
+    if not m or m.group(1).lower() != 'полное' or trust_full():
+        return ''
+    return ('В PROFILE.md доверие «полное», но хуки его не видят: нет `.claude/settings.local.json` с '
+            '{"env": {"CLAUDE_TRUST_LEVEL": "full"}} (личный файл, в git не попадает). Предложить владельцу создать '
+            'его и перезапустить сеанс.')
+
+
 def same_commit(a, b):
     a, b = (a or '').strip().lower(), (b or '').strip().lower()
     return bool(a and b) and (a.startswith(b) or b.startswith(a))
@@ -917,6 +972,9 @@ def session_start(data):
             lines.append('STATE.md ещё не заполнен — набор не инициализирован: предложить владельцу /kit-setup.')
     else:
         lines.append('docs/ai/STATE.md нет — набор не инициализирован: предложить владельцу /kit-setup.')
+    note = trust_notice(root)
+    if note:
+        lines.append(note)
     note = update_notice(root)
     if note:
         lines.append(note)

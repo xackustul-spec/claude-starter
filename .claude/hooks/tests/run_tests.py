@@ -159,6 +159,12 @@ def scenarios(impl, ps, tmp):
     write(r, 'a.txt', 'x'); git(r, 'add', '-A'); git(r, 'commit', '-qm', 'c3')
     S('старт: head отстал на 2 — предупредить', 'session-start', {'source': 'startup'}, r, 'ctx', '⚠')
     S('старт: fork', 'session-start', {'source': 'fork'}, r, 'ctx', 'Старт сеанса (fork)')
+    write(r, 'docs/ai/PROFILE.md', '## Профиль работы\n- Доверие: полное (осторожное / обычное / полное)\n')
+    S('старт: профиль полное, а хуки не видят', 'session-start', {'source': 'startup'}, r, 'ctx', 'settings.local.json')
+    S('старт: полное доверие включено — молчит', 'session-start', {'source': 'startup'}, r, 'ctx',
+      env={'CLAUDE_TRUST_LEVEL': 'full'})
+    if 'settings.local.json' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'есть подсказка', 'без подсказки', out[-1][4], '')
     os.remove(os.path.join(r, 'docs/ai/STATE.md'))
     S('старт: нет STATE', 'session-start', {'source': 'startup'}, r, 'ctx', 'STATE.md нет')
 
@@ -271,6 +277,23 @@ def scenarios(impl, ps, tmp):
     S('pre-write: CLAUDE.md при полном доверии — можно', 'pre-write',
       {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/CLAUDE.md', 'old_string': 'a', 'new_string': 'b'}}, r, 'allow',
       env={'CLAUDE_TRUST_LEVEL': 'full'})
+    write(r, 'docs/ai/PROFILE.md', '## Профиль работы\n- Доверие: полное (осторожное / обычное / полное)\n')
+    S('личные настройки: доверие по профилю — молча', 'pre-write',
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/.claude/settings.local.json',
+       'content': '{"env": {"CLAUDE_TRUST_LEVEL": "full"}}'}}, r, 'allow')
+    S('личные настройки: чужие ключи — вопрос', 'pre-write',
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/.claude/settings.local.json',
+       'content': '{"permissions": {"allow": ["Bash(rm -rf *)"]}}'}}, r, 'ask')
+    S('личные настройки: правка кусочком — вопрос', 'pre-write',
+      {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/.claude/settings.local.json',
+       'old_string': 'a', 'new_string': 'b'}}, r, 'ask')
+    write(r, 'docs/ai/PROFILE.md', '## Профиль работы\n- Доверие: обычное (осторожное / обычное / полное)\n')
+    S('личные настройки: полное без профиля — вопрос', 'pre-write',
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/.claude/settings.local.json',
+       'content': '{"env": {"CLAUDE_TRUST_LEVEL": "full"}}'}}, r, 'ask')
+    S('личные настройки: осторожный режим — молча', 'pre-write',
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/.claude/settings.local.json',
+       'content': '{"permissions": {"defaultMode": "default"}, "outputStyle": "Concise"}'}}, r, 'allow')
     S('pre-write: обычный .py — правила', 'pre-write',
       {'tool_name': 'Write', 'tool_input': {'file_path': r + '/app/main.py', 'content': '# Назначение: x\nprint("Привет")\n'}}, r, 'ctx', 'code.md')
     bom_input = b'\xef\xbb\xbf' + json.dumps({'session_id': 'bom', 'cwd': r, 'tool_input': {

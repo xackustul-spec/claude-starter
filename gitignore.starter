@@ -19,3 +19,4 @@ coverage/
 *.log
 .DS_Store
 Thumbs.db
+starter.lock

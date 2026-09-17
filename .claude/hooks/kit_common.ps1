@@ -445,9 +445,42 @@ function Invoke-GuardCyrillic($data) {
 $script:InstrRe = '(^|/)(CLAUDE(\.local|\.starter)?\.md|AGENTS\.md|\.mcp\.json|\.claude\.json)$|(^|/)\.claude/(rules|skills|hooks|agents|output-styles|commands|plugins)/|(^|/)\.claude/settings[\w.]*\.json$'
 # Защиты (разрешения и хуки) — вопрос при любом доверии: сам себе их Claude не отключает.
 $script:ProtectRe = '(^|/)\.claude/(hooks/|settings[\w.]*\.json$)|(^|/)\.claude\.json$'
+$script:LocalSettingsRe = '(^|/)\.claude/settings\.local\.json$'
+$script:SafeModes = @('default', 'acceptEdits', 'plan')
+function Test-LocalSettingsOk([string]$text, [string]$root) {
+    # Личный файл доверия Claude пишет сам, если в нём только профиль: доверие, режим, стиль ответов.
+    try { $o = $text | ConvertFrom-Json } catch { return $false }
+    if ($null -eq $o) { return $false }
+    foreach ($p in $o.PSObject.Properties) { if (@('env', 'permissions', 'outputStyle') -notcontains $p.Name) { return $false } }
+    $trust = ''
+    if ($o.env) {
+        foreach ($p in $o.env.PSObject.Properties) { if ($p.Name -ne 'CLAUDE_TRUST_LEVEL') { return $false } }
+        $trust = [string]$o.env.CLAUDE_TRUST_LEVEL
+    }
+    if ($o.permissions) {
+        foreach ($p in $o.permissions.PSObject.Properties) { if ($p.Name -ne 'defaultMode') { return $false } }
+        if ($o.permissions.defaultMode -and ($script:SafeModes -notcontains [string]$o.permissions.defaultMode)) { return $false }
+    }
+    if ($trust.ToLowerInvariant() -eq 'full') {
+        try {
+            $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'PROFILE.md'
+            if (-not [System.IO.File]::Exists($p)) { return $false }
+            $prof = [System.IO.File]::ReadAllText($p, $script:Utf8)
+            $m = [regex]::Match($prof, 'Доверие:\s*(осторожное|обычное|полное)', 'IgnoreCase')
+            if (-not $m.Success -or $m.Groups[1].Value.ToLowerInvariant() -ne 'полное') { return $false }
+        } catch { return $false }
+    }
+    return $true
+}
 function Invoke-GuardInstructions($data) {
-    $path = ([string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')) -replace '\\', '/'
+    $ti = Get-Prop $data 'tool_input'
+    $path = ([string](Get-Prop $ti 'file_path')) -replace '\\', '/'
     if ([string]::IsNullOrWhiteSpace($path) -or ($path -notmatch $script:InstrRe)) { return }
+    if ($path -match $script:LocalSettingsRe) {
+        $text = Get-Prop $ti 'content'
+        if (($null -ne $text) -and (Test-LocalSettingsOk ([string]$text) (Get-ProjectDir $data))) { return }
+        Out-Ask ('Изменение личных настроек (' + $path + '). Показать владельцу, что меняется, и получить «да» — сам Claude пишет туда только доверие из PROFILE.md, режим правок и стиль ответов, целиком файлом (Write).')
+    }
     if ($path -match $script:ProtectRe) {
         Out-Ask ('Изменение защит набора — разрешений или хуков (' + $path + '). Покажите владельцу, что меняется, и получите «да».')
     }
@@ -703,6 +736,17 @@ function Invoke-CheckDocs($data) {
 }
 
 # ------------------------------------------------------------- session-start
+function Get-TrustNotice([string]$root) {
+    # Профиль в PROFILE.md обещает полное доверие, а хуки его не видят (нет settings.local.json).
+    try {
+        $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'PROFILE.md'
+        if (-not [System.IO.File]::Exists($p)) { return '' }
+        $txt = [System.IO.File]::ReadAllText($p, $script:Utf8)
+        $m = [regex]::Match($txt, 'Доверие:\s*(осторожное|обычное|полное)', 'IgnoreCase')
+        if (-not $m.Success -or $m.Groups[1].Value.ToLowerInvariant() -ne 'полное' -or (Test-TrustFull)) { return '' }
+        return 'В PROFILE.md доверие «полное», но хуки его не видят: нет `.claude/settings.local.json` с {"env": {"CLAUDE_TRUST_LEVEL": "full"}} (личный файл, в git не попадает). Предложить владельцу создать его и перезапустить сеанс.'
+    } catch { return '' }
+}
 function Test-SameCommit([string]$a, [string]$b) {
     $a = ([string]$a).Trim().ToLowerInvariant(); $b = ([string]$b).Trim().ToLowerInvariant()
     return ($a -and $b -and ($a.StartsWith($b) -or $b.StartsWith($a)))
@@ -921,6 +965,8 @@ function Invoke-SessionStart($data) {
     } else {
         $lines += 'docs/ai/STATE.md нет — набор не инициализирован: предложить владельцу /kit-setup.'
     }
+    $note = Get-TrustNotice $root
+    if ($note) { $lines += $note }
     $note = Get-UpdateNotice $root
     if ($note) { $lines += $note }
     $lines += 'Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.'
