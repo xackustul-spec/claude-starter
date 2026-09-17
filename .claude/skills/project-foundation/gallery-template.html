@@ -1,0 +1,96 @@
+<!doctype html>
+<!--
+  Назначение: галерея для выбора стиля — все варианты превью на одной странице, переключение без перезагрузки.
+  Как использовать: Claude копирует в docs/ai/previews/index.html и вписывает свои варианты в список VARIANTS.
+  Каждый вариант — отдельный файл превью (по образцу preview-template.html) рядом с этим файлом.
+-->
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Выбор стиля — галерея вариантов</title>
+  <style>
+    :root { --bg:#f4f4f5; --panel:#fff; --text:#18181b; --muted:#71717a; --line:#e4e4e7; --accent:#4f46e5; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#18181b; --panel:#27272a; --text:#f4f4f5; --muted:#a1a1aa; --line:#3f3f46; --accent:#818cf8; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    header { display:flex; flex-wrap:wrap; gap:12px; align-items:center; padding:12px 16px; background:var(--panel); border-bottom:1px solid var(--line); }
+    h1 { font-size:18px; margin:0 12px 0 0; }
+    .tabs { display:flex; flex-wrap:wrap; gap:6px; }
+    .tab { border:1px solid var(--line); background:transparent; color:var(--text); padding:6px 12px; border-radius:8px; cursor:pointer; font-size:14px; }
+    .tab[aria-selected="true"] { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .sizes { margin-left:auto; display:flex; gap:6px; }
+    .info { padding:10px 16px; color:var(--muted); font-size:14px; }
+    .info b { color:var(--text); }
+    .stage { display:flex; justify-content:center; padding:0 16px 16px; }
+    iframe { width:100%; height:calc(100vh - 150px); border:1px solid var(--line); border-radius:12px; background:#fff; transition:width .2s; }
+    .compare iframe { width:calc(50% - 8px); }
+    .compare { gap:16px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Выбор стиля</h1>
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <div class="sizes">
+      <button class="tab" data-w="100%" aria-selected="true">Компьютер</button>
+      <button class="tab" data-w="390px">Телефон</button>
+      <button class="tab" id="cmp">Сравнить два</button>
+    </div>
+  </header>
+  <div class="info" id="info"></div>
+  <div class="stage" id="stage"><iframe id="f1" title="Превью"></iframe></div>
+
+  <script>
+    // Список вариантов — заполняет Claude: файл превью, название, коротко плюсы и минусы
+    const VARIANTS = [
+      { file: 'variant-a.html', name: 'A · daisyUI', note: 'Много готовых тем, работает с любым стеком на Tailwind. Минус: меньше сложных компонентов.' },
+      { file: 'variant-b.html', name: 'B · вариант 2', note: 'Заполнить.' },
+      { file: 'variant-c.html', name: 'C · вариант 3', note: 'Заполнить.' }
+    ];
+
+    const tabs = document.getElementById('tabs');
+    const info = document.getElementById('info');
+    const stage = document.getElementById('stage');
+    const f1 = document.getElementById('f1');
+    let current = 0, compare = false, width = '100%';
+
+    // Показ выбранного варианта; в режиме сравнения — выбранный и следующий рядом
+    function render() {
+      [...tabs.children].forEach((b, i) => b.setAttribute('aria-selected', String(i === current)));
+      const v = VARIANTS[current];
+      info.innerHTML = '<b>' + v.name + '</b> — ' + v.note;
+      f1.src = v.file;
+      f1.style.width = compare ? '' : width;
+      stage.classList.toggle('compare', compare);
+      let f2 = document.getElementById('f2');
+      if (compare) {
+        if (!f2) { f2 = document.createElement('iframe'); f2.id = 'f2'; f2.title = 'Превью 2'; stage.appendChild(f2); }
+        const w = VARIANTS[(current + 1) % VARIANTS.length];
+        f2.src = w.file;
+        info.innerHTML += '<br><b>' + w.name + '</b> — ' + w.note;
+      } else if (f2) { f2.remove(); }
+    }
+
+    VARIANTS.forEach((v, i) => {
+      const b = document.createElement('button');
+      b.className = 'tab'; b.textContent = v.name; b.setAttribute('role', 'tab');
+      b.onclick = () => { current = i; render(); };
+      tabs.appendChild(b);
+    });
+    document.querySelectorAll('.sizes [data-w]').forEach(b => b.onclick = () => {
+      width = b.dataset.w; compare = false;
+      document.querySelectorAll('.sizes .tab').forEach(x => x.setAttribute('aria-selected', String(x === b)));
+      render();
+    });
+    document.getElementById('cmp').onclick = (e) => {
+      compare = !compare;
+      document.querySelectorAll('.sizes .tab').forEach(x => x.setAttribute('aria-selected', String(compare ? x === e.target : x.dataset.w === width)));
+      render();
+    };
+    render();
+  </script>
+</body>
+</html>

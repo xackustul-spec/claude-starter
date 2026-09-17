@@ -1,0 +1,21 @@
+# Строки для .gitignore проекта (kit-setup добавляет недостающие; сам файл не копировать как .gitignore поверх существующего)
+.claude/settings.local.json
+CLAUDE.local.md
+.env
+.env.*
+!.env.example
+docs/ai/previews/before/
+node_modules/
+dist/
+build/
+.next/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+coverage/
+*.log
+.DS_Store
+Thumbs.db

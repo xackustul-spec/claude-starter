@@ -1,0 +1,131 @@
+<!doctype html>
+<!--
+  Назначение: образец превью стиля для владельца — один файл, открывается в браузере без установки.
+  Как использовать: Claude копирует в docs/ai/previews/<вариант>.html и подставляет библиотеку/тему варианта.
+  Этот образец — daisyUI 5 + Tailwind 4 из CDN (версии перед использованием сверить: compat-check).
+-->
+<html lang="ru" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Превью стиля — Вариант A (daisyUI)</title>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5/themes.css" rel="stylesheet" type="text/css">
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="min-h-screen bg-base-200">
+
+  <!-- Шапка: общая для всех экранов -->
+  <div class="navbar bg-base-100 shadow-sm px-4">
+    <div class="flex-1 gap-2 items-center flex">
+      <span class="text-xl font-bold">Название проекта</span>
+      <span class="badge badge-outline">Вариант A · daisyUI</span>
+    </div>
+    <div class="flex-none flex items-center gap-3">
+      <label class="text-sm opacity-70" for="theme">Тема</label>
+      <select id="theme" class="select select-sm w-40">
+        <option>light</option><option>dark</option><option>corporate</option>
+        <option>emerald</option><option>nord</option><option>cupcake</option>
+        <option>business</option><option>winter</option><option>dim</option>
+      </select>
+      <div class="avatar avatar-placeholder">
+        <div class="bg-neutral text-neutral-content w-9 rounded-full"><span>ИИ</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flex">
+    <!-- Меню -->
+    <ul class="menu bg-base-100 w-56 min-h-[calc(100vh-4rem)] hidden md:flex">
+      <li class="menu-title">Разделы</li>
+      <li><a class="menu-active">Обзор</a></li>
+      <li><a>Клиенты</a></li>
+      <li><a>Записи</a></li>
+      <li><a>Отчёты</a></li>
+      <li class="menu-title">Система</li>
+      <li><a>Настройки</a></li>
+    </ul>
+
+    <main class="flex-1 p-6 space-y-6">
+      <div class="alert alert-info">Пример данных — не настоящие значения.</div>
+
+      <!-- Карточки показателей (дашборд) -->
+      <div class="stats shadow bg-base-100 w-full">
+        <div class="stat"><div class="stat-title">Показатель 1</div><div class="stat-value text-primary">128</div><div class="stat-desc">за неделю</div></div>
+        <div class="stat"><div class="stat-title">Показатель 2</div><div class="stat-value">42%</div><div class="stat-desc">к прошлой неделе</div></div>
+        <div class="stat"><div class="stat-title">Показатель 3</div><div class="stat-value text-secondary">7</div><div class="stat-desc">требуют внимания</div></div>
+      </div>
+
+      <div class="grid gap-6 lg:grid-cols-3">
+        <!-- Таблица со статусами -->
+        <div class="card bg-base-100 shadow lg:col-span-2">
+          <div class="card-body">
+            <div class="flex items-center justify-between gap-2">
+              <h2 class="card-title">Список записей</h2>
+              <input class="input input-sm w-48" placeholder="Поиск…">
+            </div>
+            <div class="overflow-x-auto">
+              <table class="table table-zebra">
+                <thead><tr><th>Имя</th><th>Дата</th><th>Статус</th><th></th></tr></thead>
+                <tbody>
+                  <tr><td>Пример 1</td><td>12.09</td><td><span class="badge badge-success">готово</span></td><td><button class="btn btn-ghost btn-xs">Открыть</button></td></tr>
+                  <tr><td>Пример 2</td><td>13.09</td><td><span class="badge badge-warning">в работе</span></td><td><button class="btn btn-ghost btn-xs">Открыть</button></td></tr>
+                  <tr><td>Пример 3</td><td>14.09</td><td><span class="badge badge-error">ошибка</span></td><td><button class="btn btn-ghost btn-xs">Открыть</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Форма -->
+        <div class="card bg-base-100 shadow">
+          <div class="card-body space-y-2">
+            <h2 class="card-title">Форма</h2>
+            <input class="input w-full" placeholder="Имя">
+            <select class="select w-full"><option>Выбор из списка</option></select>
+            <textarea class="textarea w-full" placeholder="Комментарий"></textarea>
+            <label class="label"><input type="checkbox" class="toggle toggle-primary" checked> Уведомления</label>
+            <div class="card-actions justify-end">
+              <button class="btn">Отмена</button>
+              <button class="btn btn-primary">Сохранить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Кнопки и состояния -->
+      <div class="card bg-base-100 shadow">
+        <div class="card-body space-y-3">
+          <h2 class="card-title">Кнопки и состояния</h2>
+          <div class="flex flex-wrap gap-2">
+            <button class="btn btn-primary">Основная</button>
+            <button class="btn btn-secondary">Вторичная</button>
+            <button class="btn btn-accent">Акцент</button>
+            <button class="btn btn-outline">Контур</button>
+            <button class="btn btn-ghost">Призрачная</button>
+            <button class="btn btn-disabled">Недоступна</button>
+          </div>
+          <div class="grid gap-2 md:grid-cols-3">
+            <div class="alert"><span class="loading loading-spinner"></span> Загрузка…</div>
+            <div class="alert alert-warning">Пусто: данных пока нет</div>
+            <div class="alert alert-error">Ошибка: не удалось загрузить</div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // Переключатель темы: меняет стиль всей страницы одним атрибутом
+    var themeSelect = document.getElementById('theme');
+    var startTheme = document.documentElement.getAttribute('data-theme');
+    if (![].some.call(themeSelect.options, function (o) { return o.value === startTheme; })) {
+      themeSelect.add(new Option(startTheme, startTheme), 0);
+    }
+    themeSelect.value = startTheme;
+    themeSelect.addEventListener('change', function (e) {
+      document.documentElement.setAttribute('data-theme', e.target.value);
+    });
+  </script>
+</body>
+</html>

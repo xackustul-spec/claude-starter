@@ -1,0 +1,55 @@
+# Где искать инструменты (проверено 16.09.2026)
+
+Порядок = доверие. Выше — надёжнее. Цифры размеров — ориентир, сайты считают
+по-разному. Перед установкой всегда: чтение содержимого, `compat-check`, «да».
+
+## A. Официальные (Anthropic) — искать первыми
+| Каталог | Что там | Как искать / ставить |
+|---|---|---|
+| claude.com/plugins · `claude-plugins-official` (36k★) | плагины Claude Code и Cowork; интеграции github, gitlab, figma, supabase, vercel, sentry, notion, linear, slack; `security-guidance`, `commit-commands`, `pr-review-toolkit`, LSP-плагины языков | `/plugin` → Discover; `/plugin install <имя>@claude-plugins-official`; в приложении — браузер плагинов |
+| `anthropics/claude-plugins-community` (3.6k★) | плагины сообщества после автоматической проверки Anthropic | `/plugin marketplace add anthropics/claude-plugins-community` → `/plugin install <имя>@claude-community` |
+| `anthropics/skills` (169k★) | эталонные скиллы: документы (docx, pdf, pptx, xlsx), frontend-design, тестирование веб-приложений, создание MCP | `/plugin marketplace add anthropics/skills` → `document-skills@anthropic-agent-skills`, `example-skills@anthropic-agent-skills` |
+| claude.com/connectors | ~450+ удалённых коннекторов (MCP), проверенных Anthropic | в приложении Claude: настройки → коннекторы |
+
+## B. Отобранные вручную или с проверкой
+| Каталог | Что там | Как искать |
+|---|---|---|
+| skills.sh (Vercel) | крупнейший каталог скиллов (десятки тысяч), рейтинг по установкам; с 02.2026 — проверки Gen/Socket/Snyk, опасные скрыты | `npx skills find <запрос>` → `npx skills add <автор>/<репо> --skill <имя> -a claude-code` |
+| GitHub MCP Registry — github.com/mcp | ~220 MCP-серверов, отобранных GitHub | сайт; в VS Code — поиск `@mcp` |
+| Docker MCP Catalog — hub.docker.com/mcp | 300+ MCP в контейнерах, подписанные образы (самая надёжная поставка) | сайт, Docker MCP Toolkit |
+| awesome-claude-code (hesreallyhim, 53k★) | отобранные скиллы, хуки, команды, инструменты | README на GitHub |
+| ComposioHQ/awesome-claude-skills (74k★) | список скиллов (+ интеграции Composio) | README на GitHub |
+| punkpeye/awesome-mcp-servers (91k★) | большой список MCP | README на GitHub |
+
+## C. Официальный реестр MCP — самый широкий охват по MCP
+registry.modelcontextprotocol.io — ~31 тыс. серверов (много версий на сервер);
+из него берут данные многие другие каталоги. Проверяет только владение именем,
+не качество: у ~23% нет исходного кода.
+Поиск: `curl "https://registry.modelcontextprotocol.io/v0/servers?search=<слово>"`
+
+## D. Большие открытые агрегаторы — широкий охват, много шума, читать код обязательно
+| Каталог | Что там | Как искать |
+|---|---|---|
+| Smithery — smithery.ai | MCP-серверы и скиллы (тысячи) | `smithery mcp search <t>`, `smithery skill search <t>` (CLI Smithery — установка, с «да»); в 2025 у сервиса была утечка ключей (исправлено) |
+| Glama — glama.ai/mcp/servers | десятки тысяч MCP, оценки качества | сайт |
+| PulseMCP — pulsemcp.com | ~22 тыс. MCP, редакционные пометки | сайт |
+| mcp.so, mcpservers.org | ~10 тыс. MCP каждый (mcpservers — ещё скиллы) | сайт |
+| claudemarketplaces.com, claude-plugins.dev, LobeHub | плагины, скиллы, MCP | сайт; claude-plugins.dev: `npx claude-plugins install <id>` |
+| SkillsMP — skillsmp.com | миллионы найденных SKILL.md с GitHub, без проверки | сайт |
+
+## E. Не скиллы, но закрывают много задач
+- Composio (~1400 наборов) и Zapier MCP (~9000 приложений) — тысячи сервисов
+  через один MCP-вход; платные, данные идут через их сервера.
+- Библиотеки: npm, PyPI, GitHub releases; документация — Context7.
+
+## Правила выбора
+1. Сначала A, затем B/C; D — только если в A–C нет, и с полным чтением кода.
+2. Предпочитать инструменты от автора самого сервиса/библиотеки.
+3. Опасные признаки: имя «под Anthropic» от неизвестного аккаунта, похожие
+   домены, скрипты установки внутри SKILL.md, скачивание программ, запросы
+   ключей, отсутствие исходного кода у MCP.
+4. Известные атаки: вредоносные скиллы в открытых каталогах (Snyk, 02.2026:
+   76 вредоносных на ~4000), плагины с подменой зависимостей, отравление
+   описаний MCP, придуманные моделью имена пакетов.
+5. Фреймворки процесса (autopilot, Superpowers, набор Покока, Spec Kit,
+   OpenSpec, GSD) — не больше одного на проект; этот набор уже задаёт процесс.

@@ -1,0 +1,19 @@
+# Что не попадает в репозиторий набора.
+# Это исходник claude-starter, а не проект: сюда не должны попасть ни личные
+# настройки, ни следы запуска. Строки для .gitignore проекта, куда набор
+# устанавливают, лежат отдельно — в gitignore.starter.
+
+# Личные настройки Claude Code: у каждого свои, в общий набор не идут.
+# Образец остаётся в репозитории — .claude/settings.local.example.json
+.claude/settings.local.json
+CLAUDE.local.md
+
+# Следы запуска Python (тесты хуков)
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Системное
+.DS_Store
+Thumbs.db
+*.log

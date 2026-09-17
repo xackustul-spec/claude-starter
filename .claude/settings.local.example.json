@@ -1,0 +1,5 @@
+{
+  "env": {
+    "CLAUDE_TRUST_LEVEL": "full"
+  }
+}
