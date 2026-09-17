@@ -218,9 +218,19 @@ def scenarios(impl, ps, tmp):
     # версия набора: отпечатки, план обновления, уведомление о новой версии
     kit = os.path.dirname(os.path.dirname(HOOKS))
     r = new_project(tmp, f'{impl}-s6')
+    skip = shutil.ignore_patterns('__pycache__', 'tests', '.git', 'docs', 'node_modules',
+                                  '.venv', '.next', 'dist', 'build')
+    # Заготовка набора: тесты запускают и из папки проекта, где нет VERSION и INSTALL.md,
+    # а без них папка не считается исходником набора — дописываем, чтобы сценарии не зависели
+    # от того, откуда запущено.
+    basekit = os.path.join(tmp, f'{impl}-basekit')
+    shutil.copytree(kit, basekit, ignore=skip)
+    for name, body in (('VERSION', '1.0.0\n'), ('INSTALL.md', '# установка\n'), ('README.md', '# набор\n')):
+        if not os.path.isfile(os.path.join(basekit, name)):
+            write(basekit, name, body)
     newkit = os.path.join(tmp, f'{impl}-newkit')
-    shutil.copytree(kit, newkit, ignore=shutil.ignore_patterns('__pycache__', 'tests', '.git'))
-    S('версия: записать отпечатки', 'manifest', b'', r, 'ctx', 'версия', args=[kit, newkit])
+    shutil.copytree(basekit, newkit, ignore=skip)
+    S('версия: записать отпечатки', 'manifest', b'', r, 'ctx', 'версия', args=[basekit, newkit])
     S('версия: та же версия — без уведомления', 'session-start', {'source': 'startup'}, r, 'ctx')
     if 'новая версия' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'уведомление', 'без уведомления', out[-1][4], '')
