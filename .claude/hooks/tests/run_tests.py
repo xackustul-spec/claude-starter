@@ -174,6 +174,23 @@ def scenarios(impl, ps, tmp):
     write(r, 'notes/owner.py', 'x = 1\n')
     s = f'{impl}-turn-{os.getpid()}'
     S('ход: начало', 'turn-start', turn(r, s), r, 'ctx', 'Набор:')
+    def ask(text):
+        return {'session_id': f'{impl}-hint-{sid[0]}-{os.getpid()}', 'cwd': r, 'prompt': text,
+                'scratchpad_dir': os.path.join(tmp, 'state')}
+    S('подсказка: просят варианты', 'turn-start', ask('покажи варианты готовых шаблонов панели'), r, 'ctx',
+      'Как выдавать выбор')
+    S('подсказка: варианты — про своё мнение', 'turn-start', ask('какие есть готовые темы'), r, 'ctx',
+      'своё мнение')
+    S('подсказка: варианты — бесплатное по умолчанию', 'turn-start', ask('подбери библиотеку для графиков'), r,
+      'ctx', 'Бесплатное по умолчанию')
+    S('подсказка: «не то» — искать чужое готовое', 'turn-start', ask('это не то'), r, 'ctx',
+      'не переделывать')
+    S('подсказка: «не то» коротким сообщением — всё равно срабатывает', 'turn-start', ask('не подходит'), r,
+      'ctx', 'tool-scout')
+    S('подсказка: обычная просьба — молчит', 'turn-start', ask('поправь опечатку в файле README'), r, 'ctx')
+    if 'Как выдавать выбор' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'подсказка', 'без подсказки', out[-1][4], '')
+    S('подсказка: команда со слэшем — молчит', 'turn-start', ask('/kit-audit покажи варианты'), r, 'allow')
     S('ход: чужой файл не считается', 'check-docs', {'session_id': s, 'stop_hook_active': False}, r, 'allow')
     write(r, 'src/app.py', 'print(1)\n')
     S('ход: код без шапки и документов', 'check-docs', {'session_id': s}, r, 'block', 'src/app.py')
