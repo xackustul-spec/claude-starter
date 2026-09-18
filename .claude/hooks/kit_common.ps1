@@ -647,11 +647,217 @@ function Get-ChoiceHint([string]$prompt) {
     if ($notIt) { return @($script:NotItHint, $script:ChoiceHint) }
     return @($script:ChoiceHint)
 }
+# ------------------------------------------------------------------ хронометраж
+# Строка на каждый ответ: когда начали, сколько всего, сколько ждали инструменты,
+# сколько думала модель, какие инструменты и куда смотрели, и сам вопрос владельца.
+$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;инструменты;куда смотрел;вопрос'
+$script:TimingTail = 1500000
+$script:TimingRows = 4000
+$script:TimingSlow = 120.0
+$script:Inv = [System.Globalization.CultureInfo]::InvariantCulture
+function Get-NowSec { return ([double][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) / 1000.0 }
+function Get-IsoTs($value) {
+    # '2026-09-17T20:06:25.028Z' -> секунды epoch; не разобралось — $null.
+    # ConvertFrom-Json сам превращает такие строки в [datetime] — учитываем оба случая.
+    if ($null -eq $value) { return $null }
+    try {
+        if ($value -is [DateTimeOffset]) { return ([double]$value.ToUnixTimeMilliseconds()) / 1000.0 }
+        if ($value -is [datetime]) {
+            $d = $value
+            if ($d.Kind -eq [DateTimeKind]::Unspecified) { $d = [DateTime]::SpecifyKind($d, [DateTimeKind]::Utc) }
+            return ([double]([DateTimeOffset]$d).ToUnixTimeMilliseconds()) / 1000.0
+        }
+        $text = ([string]$value).Trim()
+        if (-not $text) { return $null }
+        $styles = [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+        $dto = [DateTimeOffset]::Parse($text, $script:Inv, $styles)
+        return ([double]$dto.ToUnixTimeMilliseconds()) / 1000.0
+    } catch { return $null }
+}
+function Get-Cut([string]$s, [int]$n) {
+    if ([string]::IsNullOrEmpty($s)) { return '' }
+    if ($s.Length -le $n) { return $s }
+    return $s.Substring(0, $n)
+}
+function Get-ToolTarget($inp) {
+    # «Куда смотрел»: файл, адрес, запрос или команда — одним коротким словом.
+    if ($null -eq $inp) { return '' }
+    foreach ($key in @('file_path', 'path', 'notebook_path')) {
+        $v = [string](Get-Prop $inp $key)
+        if ($v.Trim()) {
+            $v = $v.Trim().Replace('\', '/').TrimEnd('/')
+            $parts = @($v -split '/')
+            $leaf = $parts[$parts.Count - 1]
+            if ($leaf) { return $leaf }
+            return $v
+        }
+    }
+    $v = [string](Get-Prop $inp 'url')
+    if ($v.Trim()) {
+        $m = [regex]::Match($v.Trim(), '^https?://([^/]+)')
+        if ($m.Success) { return $m.Groups[1].Value }
+        return (Get-Cut $v.Trim() 40)
+    }
+    foreach ($key in @('query', 'pattern', 'prompt')) {
+        $v = [string](Get-Prop $inp $key)
+        if ($v.Trim()) { return (Get-Cut ([regex]::Replace($v.Trim(), '\s+', ' ')) 40) }
+    }
+    $v = [string](Get-Prop $inp 'command')
+    if ($v.Trim()) {
+        $parts = @(($v.Trim() -split '\s+') | Where-Object { $_ })
+        $head = @($parts[0].Replace('\', '/') -split '/')[-1]
+        if ((@('cd', 'sudo', 'env', 'time') -contains $head) -and $parts.Count -gt 1) {
+            $head = @($parts[1].Replace('\', '/') -split '/')[-1]
+        }
+        return (Get-Cut $head 40)
+    }
+    return ''
+}
+function Get-TurnTools([string]$path, [double]$since) {
+    # Хвост расшифровки: вызовы инструментов этого хода и время их ответов.
+    $out = @{ uses = @(); results = @{} }
+    if ([string]::IsNullOrWhiteSpace($path)) { return $out }
+    $raw = ''
+    try {
+        if (-not [System.IO.File]::Exists($path)) { return $out }
+        $len = (New-Object System.IO.FileInfo $path).Length
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $skip = $false
+            if ($len -gt $script:TimingTail) { [void]$fs.Seek($len - $script:TimingTail, [System.IO.SeekOrigin]::Begin); $skip = $true }
+            $sr = New-Object System.IO.StreamReader($fs, $script:Utf8)
+            if ($skip) { [void]$sr.ReadLine() }
+            $raw = $sr.ReadToEnd()
+        } finally { $fs.Dispose() }
+    } catch { return $out }
+    $uses = @()
+    foreach ($line in ($raw -split "`n")) {
+        # Разбираем только строки с вызовами инструментов: остальные (текст ответа) дороги и не нужны.
+        if ($line.IndexOf('tool_use') -lt 0) { continue }
+        $rec = $null
+        try { $rec = $line | ConvertFrom-Json } catch { continue }
+        $ts = Get-IsoTs (Get-Prop $rec 'timestamp')
+        if (($null -eq $ts) -or ($ts -lt $since)) { continue }
+        # @() обязательно: PowerShell разворачивает массив из одного элемента при возврате из функции.
+        $content = @(Get-Prop (Get-Prop $rec 'message') 'content')
+        foreach ($b in $content) {
+            if ($null -eq $b -or $b -is [string]) { continue }
+            $type = [string](Get-Prop $b 'type')
+            if ($type -eq 'tool_use') {
+                $nm = [string](Get-Prop $b 'name'); if (-not $nm) { $nm = '?' }
+                $uses += [pscustomobject]@{ Id = [string](Get-Prop $b 'id'); Name = $nm; Input = (Get-Prop $b 'input'); Ts = $ts }
+            } elseif ($type -eq 'tool_result') {
+                $tid = [string](Get-Prop $b 'tool_use_id')
+                if ((-not $out.results.ContainsKey($tid)) -or ($ts -lt $out.results[$tid])) { $out.results[$tid] = $ts }
+            }
+        }
+    }
+    $out.uses = @($uses)
+    return $out
+}
+function Get-CsvCell($text) {
+    return ([regex]::Replace([string]$text, '\s+', ' ')).Replace(';', ',').Trim()
+}
+function Get-TimingRow($data, $snap) {
+    $start = 0.0
+    try { $start = [double](Get-Prop $snap 'ts') } catch { $start = 0.0 }
+    $total = (Get-NowSec) - $start
+    if ($total -lt 0) { $total = 0.0 }
+    $calls = 0; $toolS = 0.0; $names = @{}; $targets = @()
+    $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) ($start - 1.0)
+    $seen = @{}
+    foreach ($u in @($tt.uses | Sort-Object Ts)) {
+        if ($seen.ContainsKey($u.Id)) { continue }
+        $seen[$u.Id] = $true
+        $calls += 1
+        if ($names.ContainsKey($u.Name)) { $names[$u.Name] = [int]$names[$u.Name] + 1 } else { $names[$u.Name] = 1 }
+        if ($tt.results.ContainsKey($u.Id)) {
+            $end = [double]$tt.results[$u.Id]
+            if ($end -ge $u.Ts) { $toolS += ($end - $u.Ts) }
+        }
+        $tgt = Get-ToolTarget $u.Input
+        if ($tgt -and ($targets -notcontains $tgt)) { $targets += $tgt }
+    }
+    if ($toolS -gt $total) { $toolS = $total }
+    $pairs = @()
+    foreach ($k in (Sort-Ordinal @($names.Keys))) { $pairs += [pscustomobject]@{ N = $k; C = [int]$names[$k] } }
+    $top = ((@($pairs | Sort-Object -Property @{ Expression = 'C'; Descending = $true } | Select-Object -First 6) | ForEach-Object { $_.N + '*' + $_.C }) -join ' ')
+    $when = [DateTimeOffset]::FromUnixTimeMilliseconds([long]([Math]::Round($start * 1000))).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss', $script:Inv)
+    $cells = @($when,
+        $total.ToString('0.0', $script:Inv),
+        $toolS.ToString('0.0', $script:Inv),
+        ($total - $toolS).ToString('0.0', $script:Inv),
+        [string]$calls,
+        (Get-CsvCell $top),
+        (Get-Cut (Get-CsvCell (@($targets | Select-Object -First 12) -join ' ')) 180),
+        (Get-Cut (Get-CsvCell (Get-Prop $snap 'prompt')) 140))
+    return ($cells -join ';')
+}
+function Get-TimingPath([string]$root) {
+    return (Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'timing.csv')
+}
+function Write-Timing($data, [string]$root) {
+    # Вызывается при завершении ответа; повторный вызов того же хода строку заменяет.
+    if (-not [System.IO.Directory]::Exists((Join-Path (Join-Path $root 'docs') 'ai'))) { return }
+    $snap = $null
+    try {
+        $sf = Get-StateFile $data 'turn'
+        if (Test-Path -LiteralPath $sf) { $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json }
+    } catch { $snap = $null }
+    if ($null -eq $snap -or -not (Get-Prop $snap 'ts')) { return }
+    $row = ''
+    try { $row = Get-TimingRow $data $snap } catch { return }
+    if (-not $row) { return }
+    $path = Get-TimingPath $root
+    try {
+        $lines = @()
+        if ([System.IO.File]::Exists($path)) {
+            $txt = [System.IO.File]::ReadAllText($path, $script:Utf8)
+            $lines = @(($txt -split "`n") | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Trim() })
+        }
+        if ($lines.Count -eq 0 -or -not $lines[0].StartsWith('начало')) { $lines = @($script:TimingHead) + $lines }
+        if ($lines.Count -gt 1 -and (@($lines[$lines.Count - 1] -split ';')[0] -eq @($row -split ';')[0])) {
+            $lines = @($lines | Select-Object -First ($lines.Count - 1))
+        }
+        $lines += $row
+        if ($lines.Count -gt $script:TimingRows) {
+            $lines = @($lines[0]) + @($lines | Select-Object -Last ($script:TimingRows - 1))
+        }
+        [System.IO.File]::WriteAllText($path, (($lines -join "`n") + "`n"), $script:Utf8)
+    } catch {}
+}
+function Get-TimingNotice([string]$root) {
+    # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
+    $path = Get-TimingPath $root
+    if (-not [System.IO.File]::Exists($path)) { return $null }
+    $rows = @()
+    try {
+        $txt = [System.IO.File]::ReadAllText($path, $script:Utf8)
+        $rows = @(($txt -split "`n") | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Trim() } | Select-Object -Skip 1)
+    } catch { return $null }
+    $rows = @($rows | Select-Object -Last 20)
+    $tot = @(); $too = @()
+    foreach ($r in $rows) {
+        $p = @($r -split ';')
+        if ($p.Count -lt 5) { continue }
+        try { $tot += [double]::Parse($p[1], $script:Inv); $too += [double]::Parse($p[2], $script:Inv) } catch {}
+    }
+    if ($tot.Count -lt 10) { return $null }
+    $avg = ($tot | Measure-Object -Sum).Sum / $tot.Count
+    $avgT = ($too | Measure-Object -Sum).Sum / $too.Count
+    $share = 0
+    if ($avg -gt 0) { $share = [int][Math]::Round(100 * $avgT / $avg) }
+    $slow = @($tot | Where-Object { $_ -ge $script:TimingSlow }).Count
+    $tail = ''
+    if ($slow -ge 3) { $tail = ' Долгих (от 2 мин) — ' + $slow + ' из ' + $tot.Count + ': предложить владельцу /kit-timing.' }
+    return ('Хронометраж: последние ' + $tot.Count + ' ответов — в среднем ' + $avg.ToString('0', $script:Inv) + ' с, из них в инструментах ' + $avgT.ToString('0', $script:Inv) + ' с (' + $share + '%).' + $tail)
+}
 function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data
     $ts = 0
     try { $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } catch {}
-    $snap = @{ ts = $ts; head = $null; status = @{} }
+    $prompt0 = [regex]::Replace(([string](Get-Prop $data 'prompt')).Trim(), '\s+', ' ')
+    $snap = @{ ts = $ts; head = $null; status = @{}; prompt = (Get-Cut $prompt0 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -718,8 +924,9 @@ function Set-StateStamp([string]$root, [string]$top) {
     } catch {}
 }
 function Invoke-CheckDocs($data) {
-    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return }
     $root = Get-ProjectDir $data
+    Write-Timing $data $root
+    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) { return }
     $head = $head.Trim()
@@ -1010,6 +1217,8 @@ function Invoke-SessionStart($data) {
     $note = Get-TrustNotice $root
     if ($note) { $lines += $note }
     $note = Get-UpdateNotice $root
+    if ($note) { $lines += $note }
+    $note = Get-TimingNotice $root
     if ($note) { $lines += $note }
     $lines += 'Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.'
     Write-Out ($lines -join "`n")

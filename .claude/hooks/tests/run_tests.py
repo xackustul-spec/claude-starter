@@ -8,9 +8,11 @@ import argparse
 import json
 import os
 import shutil
+import re
 import subprocess
 import sys
 import tempfile
+import time
 
 HOOKS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HOOKS)
@@ -231,6 +233,80 @@ def scenarios(impl, ps, tmp):
     write(r, 'docs/ai/KNOWLEDGE.md', ''.join(f'- факт {i}\n' for i in range(80)))
     write(r, 'docs/ai/API_YANDEX.md', ''.join(f'- метод {i}\n' for i in range(301)))
     S('документы: тематический переполнен', 'check-docs', {'session_id': s5}, r, 'block', 'API_YANDEX.md (301')
+
+    # хронометраж: строка на каждый ответ
+    r = new_project(tmp, f'{impl}-s7')
+    git(r, 'init', '-q'); git(r, 'add', '-A'); git(r, 'commit', '-qm', 'init')
+    s7 = f'{impl}-timing-{os.getpid()}'
+    tr = os.path.join(r, 'transcript.jsonl')
+    t0 = time.time() - 40
+
+    def iso(t):
+        return time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(t)) + '.000Z'
+
+    def use(t, tid, name, inp):
+        return {'type': 'assistant', 'timestamp': iso(t),
+                'message': {'content': [{'type': 'tool_use', 'id': tid, 'name': name, 'input': inp}]}}
+
+    def res(t, tid):
+        return {'type': 'user', 'timestamp': iso(t),
+                'message': {'content': [{'type': 'tool_result', 'tool_use_id': tid, 'content': 'ok'}]}}
+
+    recs = [{'type': 'assistant', 'timestamp': iso(t0 - 600),
+             'message': {'content': [{'type': 'tool_use', 'id': 'old', 'name': 'Read',
+                                      'input': {'file_path': '/tmp/prev.txt'}}]}},
+            use(t0 + 2, 'a1', 'Bash', {'command': 'grep -n foo src/app.py'}),
+            res(t0 + 9, 'a1'),
+            use(t0 + 12, 'a2', 'Read', {'file_path': os.path.join(r, 'docs', 'ai', 'STATE.md')}),
+            res(t0 + 13, 'a2'),
+            use(t0 + 20, 'a3', 'WebSearch', {'query': 'shadcn dashboard template'}),
+            res(t0 + 34, 'a3')]
+    with open(tr, 'w', encoding='utf-8') as fh:
+        fh.write('\n'.join(json.dumps(x, ensure_ascii=False) for x in recs) + '\n')
+    tdata = {'session_id': s7, 'cwd': r, 'prompt': 'почему   ответ идёт так долго; посмотри',
+             'transcript_path': tr, 'scratchpad_dir': os.path.join(tmp, 'state')}
+    S('хронометраж: начало хода', 'turn-start', tdata, r, 'ctx')
+    snapf = os.path.join(tmp, 'state', 'starter-%s.turn.json' % re.sub(r'[^\w.-]', '_', s7))
+
+    def back_date():
+        try:
+            snap = json.load(open(snapf, encoding='utf-8'))
+            snap['ts'] = t0
+            json.dump(snap, open(snapf, 'w', encoding='utf-8'), ensure_ascii=False)
+            return True
+        except Exception:
+            return False
+
+    def check(name, cond, got=''):
+        out.append((name, bool(cond), 'да' if cond else 'нет', 'да', str(got)[:160], ''))
+
+    csvf = os.path.join(r, 'docs', 'ai', 'timing.csv')
+    check('хронометраж: снимок хода записан', back_date(), snapf)
+    S('хронометраж: конец хода', 'check-docs', {'session_id': s7, 'transcript_path': tr}, r, 'allow')
+    rows = []
+    try:
+        rows = [x for x in open(csvf, encoding='utf-8-sig').read().split('\n') if x.strip()]
+    except Exception:
+        pass
+    check('хронометраж: файл и заголовок', rows and rows[0].startswith('начало;всего_с'), rows[:1])
+    cells = rows[1].split(';') if len(rows) > 1 else []
+    check('хронометраж: одна строка на ход', len(rows) == 2, len(rows))
+    check('хронометраж: всего секунд посчитано', len(cells) > 1 and 39.0 <= float(cells[1] or 0) <= 60.0, cells[1:2])
+    check('хронометраж: время инструментов посчитано', len(cells) > 2 and abs(float(cells[2] or 0) - 22.0) < 1.5, cells[2:3])
+    check('хронометраж: время модели = всего минус инструменты',
+          len(cells) > 3 and abs(float(cells[1]) - float(cells[2]) - float(cells[3])) < 0.2, cells[1:4])
+    check('хронометраж: чужой ход не попал', len(cells) > 4 and cells[4] == '3', cells[4:5])
+    check('хронометраж: инструменты названы', len(cells) > 5 and 'Bash*1' in cells[5] and 'WebSearch*1' in cells[5], cells[5:6])
+    check('хронометраж: куда смотрел', len(cells) > 6 and 'STATE.md' in cells[6] and 'grep' in cells[6], cells[6:7])
+    check('хронометраж: вопрос владельца', len(cells) > 7 and 'почему ответ идёт так долго' in cells[7], cells[7:8])
+    check('хронометраж: точка с запятой убрана из вопроса', len(cells) == 8, len(cells))
+    back_date()
+    S('хронометраж: повторный Stop', 'check-docs', {'session_id': s7, 'stop_hook_active': True, 'transcript_path': tr}, r, 'allow')
+    try:
+        rows2 = [x for x in open(csvf, encoding='utf-8-sig').read().split('\n') if x.strip()]
+    except Exception:
+        rows2 = []
+    check('хронометраж: строка заменяется, а не двоится', len(rows2) == 2, len(rows2))
 
     # версия набора: отпечатки, план обновления, уведомление о новой версии
     kit = os.path.dirname(os.path.dirname(HOOKS))

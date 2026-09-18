@@ -5,6 +5,7 @@ CLAUDE.local.md
 .env.*
 !.env.example
 docs/ai/previews/before/
+docs/ai/timing.csv
 node_modules/
 dist/
 build/

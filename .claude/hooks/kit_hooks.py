@@ -4,6 +4,7 @@
 # Команды: guard-shell, guard-cyrillic, guard-instructions, rules-on-write,
 #          check-python, turn-start, session-start, check-docs.
 # Побочные эффекты: пишет снимки хода в каталог состояния сеанса (scratchpad или temp).
+import calendar
 import json
 import os
 import re
@@ -786,9 +787,197 @@ def choice_hint(prompt):
     return (NOT_IT_HINT if not_it else '') + CHOICE_HINT
 
 
+# ------------------------------------------------------------------ хронометраж
+# Строка на каждый ответ: когда начали, сколько всего, сколько ждали инструменты,
+# сколько думала модель, какие инструменты и куда смотрели, и сам вопрос владельца.
+TIMING_HEAD = 'начало;всего_с;инструменты_с;модель_с;вызовов;инструменты;куда смотрел;вопрос'
+TIMING_TAIL = 1500000
+TIMING_ROWS = 4000
+TIMING_SLOW = 120.0
+
+
+def iso_ts(text):
+    # '2026-09-17T20:06:25.028Z' -> секунды epoch; не разобралось — None.
+    m = re.match(r'(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)(?:\.(\d+))?(Z|z|[+-]\d\d:?\d\d)?$',
+                 str(text or '').strip())
+    if not m:
+        return None
+    try:
+        base = calendar.timegm(tuple(int(m.group(i)) for i in range(1, 7)) + (0, 1, -1))
+    except Exception:
+        return None
+    if m.group(7):
+        base += float('0.' + m.group(7))
+    tz = m.group(8) or 'Z'
+    if tz not in ('Z', 'z'):
+        digits = tz[1:].replace(':', '')
+        off = int(digits[:2]) * 3600 + int(digits[2:4]) * 60
+        base -= off if tz[0] == '+' else -off
+    return base
+
+
+def tool_target(inp):
+    # «Куда смотрел»: файл, адрес, запрос или команда — одним коротким словом.
+    if not isinstance(inp, dict):
+        return ''
+    for key in ('file_path', 'path', 'notebook_path'):
+        v = inp.get(key)
+        if isinstance(v, str) and v.strip():
+            v = v.strip().replace('\\', '/').rstrip('/')
+            return v.rsplit('/', 1)[-1] or v
+    v = inp.get('url')
+    if isinstance(v, str) and v.strip():
+        m = re.match(r'https?://([^/]+)', v.strip())
+        return m.group(1) if m else v.strip()[:40]
+    for key in ('query', 'pattern', 'prompt'):
+        v = inp.get(key)
+        if isinstance(v, str) and v.strip():
+            return re.sub(r'\s+', ' ', v.strip())[:40]
+    v = inp.get('command')
+    if isinstance(v, str) and v.strip():
+        parts = [p for p in v.strip().split() if p]
+        head = parts[0].replace('\\', '/').rsplit('/', 1)[-1]
+        if head in ('cd', 'sudo', 'env', 'time') and len(parts) > 1:
+            head = parts[1].replace('\\', '/').rsplit('/', 1)[-1]
+        return head[:40]
+    return ''
+
+
+def turn_tools(path, since):
+    # Хвост расшифровки: вызовы инструментов этого хода и время их ответов.
+    uses, results = {}, {}
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as fh:
+            if size > TIMING_TAIL:
+                fh.seek(size - TIMING_TAIL)
+                fh.readline()
+            raw = fh.read()
+    except Exception:
+        return uses, results
+    for line in raw.split(b'\n'):
+        # Разбираем только строки с вызовами инструментов: остальные (текст ответа) дороги и не нужны.
+        if b'tool_use' not in line:
+            continue
+        try:
+            rec = json.loads(line.decode('utf-8', 'replace'))
+        except Exception:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        ts = iso_ts(rec.get('timestamp'))
+        if ts is None or ts < since:
+            continue
+        content = (rec.get('message') or {}).get('content') if isinstance(rec.get('message'), dict) else None
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get('type') == 'tool_use':
+                uses[str(b.get('id'))] = (str(b.get('name') or '?'), b.get('input'), ts)
+            elif b.get('type') == 'tool_result':
+                tid = str(b.get('tool_use_id'))
+                if tid not in results or ts < results[tid]:
+                    results[tid] = ts
+    return uses, results
+
+
+def csv_cell(text):
+    return re.sub(r'\s+', ' ', str(text or '')).replace(';', ',').strip()
+
+
+def timing_row(data, snap):
+    start = float(snap.get('ts') or 0)
+    total = max(0.0, time.time() - start)
+    calls, tool_s, names, targets = 0, 0.0, {}, []
+    uses, results = turn_tools(str(data.get('transcript_path') or ''), start - 1.0)
+    for tid, (name, inp, ts) in sorted(uses.items(), key=lambda kv: kv[1][2]):
+        calls += 1
+        names[name] = names.get(name, 0) + 1
+        end = results.get(tid)
+        if end is not None and end >= ts:
+            tool_s += end - ts
+        tgt = tool_target(inp)
+        if tgt and tgt not in targets:
+            targets.append(tgt)
+    tool_s = min(tool_s, total)
+    top = ' '.join('%s*%d' % (n, c) for n, c in sorted(names.items(), key=lambda kv: (-kv[1], kv[0]))[:6])
+    return ';'.join([time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)),
+                     '%.1f' % total, '%.1f' % tool_s, '%.1f' % (total - tool_s), str(calls),
+                     csv_cell(top), csv_cell(' '.join(targets[:12]))[:180],
+                     csv_cell(snap.get('prompt'))[:140]])
+
+
+def timing_path(root):
+    return os.path.join(root, 'docs', 'ai', 'timing.csv')
+
+
+def write_timing(data, root):
+    # Вызывается при завершении ответа; повторный вызов того же хода строку заменяет.
+    if not os.path.isdir(os.path.join(root, 'docs', 'ai')):
+        return
+    try:
+        snap = json.load(open(state_file(data, 'turn'), encoding='utf-8'))
+    except Exception:
+        return
+    if not snap.get('ts'):
+        return
+    try:
+        row = timing_row(data, snap)
+    except Exception:
+        return
+    path = timing_path(root)
+    try:
+        lines = []
+        if os.path.isfile(path):
+            with open(path, encoding='utf-8-sig', errors='replace') as fh:
+                lines = [x for x in fh.read().split('\n') if x.strip()]
+        if not lines or not lines[0].startswith('начало'):
+            lines = [TIMING_HEAD] + lines
+        if len(lines) > 1 and lines[-1].split(';')[0] == row.split(';')[0]:
+            lines = lines[:-1]
+        lines.append(row)
+        if len(lines) > TIMING_ROWS:
+            lines = [lines[0]] + lines[-(TIMING_ROWS - 1):]
+        with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write('\n'.join(lines) + '\n')
+    except Exception:
+        pass
+
+
+def timing_notice(root):
+    # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
+    try:
+        with open(timing_path(root), encoding='utf-8-sig', errors='replace') as fh:
+            rows = [x for x in fh.read().split('\n') if x.strip()][1:]
+    except Exception:
+        return None
+    rows = rows[-20:]
+    vals = []
+    for r in rows:
+        p = r.split(';')
+        if len(p) < 5:
+            continue
+        try:
+            vals.append((float(p[1]), float(p[2])))
+        except Exception:
+            pass
+    if len(vals) < 10:
+        return None
+    total = sum(v[0] for v in vals) / len(vals)
+    tools = sum(v[1] for v in vals) / len(vals)
+    share = int(round(100 * tools / total)) if total > 0 else 0
+    slow = len([v for v in vals if v[0] >= TIMING_SLOW])
+    tail = ' Долгих (от 2 мин) — %d из %d: предложить владельцу /kit-timing.' % (slow, len(vals)) if slow >= 3 else ''
+    return 'Хронометраж: последние %d ответов — в среднем %.0f с, из них в инструментах %.0f с (%d%%).%s' % (
+        len(vals), total, tools, share, tail)
+
+
 def turn_start(data):
     root = project_dir(data)
-    snap = {'ts': time.time(), 'head': None, 'status': {}}
+    snap = {'ts': time.time(), 'head': None, 'status': {},
+            'prompt': re.sub(r'\s+', ' ', str(data.get('prompt') or '')).strip()[:140]}
     head = git(root, 'rev-parse', 'HEAD')
     if head is not None:
         snap['head'] = head.strip()
@@ -813,9 +1002,10 @@ def turn_start(data):
 
 
 def check_docs(data):
+    root = project_dir(data)
+    write_timing(data, root)
     if data.get('stop_hook_active') is True:
         return
-    root = project_dir(data)
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
         return
@@ -1036,6 +1226,9 @@ def session_start(data):
     if note:
         lines.append(note)
     note = update_notice(root)
+    if note:
+        lines.append(note)
+    note = timing_notice(root)
     if note:
         lines.append(note)
     lines.append('Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.')
