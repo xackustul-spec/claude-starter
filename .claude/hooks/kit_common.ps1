@@ -633,6 +633,20 @@ function Get-GitStatusMap([string]$root) {
     }
     return $res
 }
+# Слова владельца, после которых порядок «Как выдавать выбор» кладётся прямо перед ответом:
+# правило в файле само не срабатывает, а вложенное хуком — срабатывает всегда.
+$script:ChoiceRe = 'покажи\s+вариант|дай\s+вариант|список\s+вариант|какие\s+(есть|бывают|варианты)|что\s+есть\s+готов|сколько\s+(их\s+)?есть|выбрать\s+из|подбери|найди\s+(готов|шаблон|тем[уы]|библиотек|вариант|стартер)|покажи\s+(шаблон|тем[уы]|готов)|варианты\b'
+$script:NotItRe = 'не\s+то\b|не\s+подходит|не\s+нравится|не\s+этого\s+хотел|не\s+так\s+сделал|опять\s+не\s+то|вс[её]\s+не\s+то'
+$script:ChoiceHint = 'Набор: просят варианты. Порядок — SEARCH.md, «Как выдавать выбор»: слово понимать буквально (шаблон ≠ библиотека); идти в реестр с программным доступом (GitHub API, npm, PyPI), а не в память и не в один каталог; у каждого варианта только проверяемые поля из API — звёзды, лицензия, дата правки, адрес живой витрины; дать столько, сколько попросили; показывать витрины автора, а не свои превью; страница с поиском плюс верхушка списка прямо в ответе; отбор под стек — после показа всего; назвать своё мнение одним вариантом с причиной по делу; закончить одним шагом выбора. Бесплатное по умолчанию (SEARCH.md, «Деньги»).'
+$script:NotItHint = 'Набор: владельцу «не то». Своё в следующий раз не переделывать — искать чужое готовое (скилл tool-scout, §0) и показать варианты по порядку ниже.'
+function Get-ChoiceHint([string]$prompt) {
+    # Подсказка перед ответом: владелец просит варианты или говорит «не то».
+    $notIt = $prompt -match $script:NotItRe
+    $choice = $prompt -match $script:ChoiceRe
+    if (-not ($notIt -or $choice)) { return @() }
+    if ($notIt) { return @($script:NotItHint, $script:ChoiceHint) }
+    return @($script:ChoiceHint)
+}
 function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data
     $ts = 0
@@ -647,7 +661,10 @@ function Invoke-TurnStart($data) {
     }
     try { ($snap | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'turn') -Encoding UTF8 } catch {}
     $prompt = ([string](Get-Prop $data 'prompt')).Trim()
-    if ($prompt.StartsWith('/') -or $prompt.Length -lt 12) { return }
+    if ($prompt.StartsWith('/')) { return }
+    $hint = Get-ChoiceHint $prompt
+    if ($hint) { foreach ($line in $hint) { Write-Out $line } }
+    if ($prompt.Length -lt 12) { return }
     Write-Out 'Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог». Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.'
 }
 # Лимиты строк: подключённые всегда документы — жёстче, остальные — 300.
