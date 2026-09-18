@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-# Назначение: свод по docs/ai/timing.csv — куда уходит время ответов (для скилла kit-timing).
+# Назначение: свод по docs/ai/timing.csv — куда уходит время и токены (для скилла kit-timing).
 # Запуск из корня проекта: python .claude/skills/kit-timing/report.py [сколько последних ходов]
 # Побочные эффекты: ничего не пишет, только читает и печатает.
 import os
 import sys
 
-HEAD = 'начало;всего_с;инструменты_с;модель_с;вызовов;инструменты;куда смотрел;вопрос'
+COLS = ['when', 'total', 'tools', 'model_s', 'calls', 'req', 'tin', 'cread', 'cwrite',
+        'tout', 'think', 'model', 'effort', 'speed', 'names', 'look', 'ask']
+NUM = {'total': float, 'tools': float, 'model_s': float, 'calls': int, 'req': int,
+       'tin': int, 'cread': int, 'cwrite': int, 'tout': int, 'think': int}
 
 
 def load(path):
@@ -16,14 +19,15 @@ def load(path):
             if not line.strip() or line.startswith('начало;'):
                 continue
             p = line.split(';')
-            if len(p) < 8:
+            if len(p) < len(COLS):
                 continue
+            row = dict(zip(COLS, p))
             try:
-                rows.append({'when': p[0], 'total': float(p[1]), 'tools': float(p[2]),
-                             'model': float(p[3]), 'calls': int(p[4]), 'names': p[5],
-                             'look': p[6], 'ask': p[7]})
+                for k, f in NUM.items():
+                    row[k] = f(row[k] or 0)
             except ValueError:
                 continue
+            rows.append(row)
     return rows
 
 
@@ -31,8 +35,15 @@ def pct(vals, q):
     if not vals:
         return 0.0
     s = sorted(vals)
-    i = min(len(s) - 1, max(0, int(round((len(s) - 1) * q))))
-    return s[i]
+    return s[min(len(s) - 1, max(0, int(round((len(s) - 1) * q))))]
+
+
+def counts(rows, key):
+    out = {}
+    for r in rows:
+        v = (r[key] or '—').strip() or '—'
+        out[v] = out.get(v, 0) + 1
+    return sorted(out.items(), key=lambda kv: -kv[1])
 
 
 def main():
@@ -53,32 +64,48 @@ def main():
     if not rows:
         print('Строк нет: ' + path)
         return
+    n = len(rows)
     tot = [r['total'] for r in rows]
     print('Файл: ' + path)
-    print('Ходов: %d, с %s по %s' % (len(rows), rows[0]['when'], rows[-1]['when']))
+    print('Ходов: %d, с %s по %s' % (n, rows[0]['when'], rows[-1]['when']))
     print('Всего времени: %.0f мин. Средний ход: %.0f с, середина %.0f с, девять из десяти до %.0f с, худший %.0f с.'
-          % (sum(tot) / 60.0, sum(tot) / len(tot), pct(tot, 0.5), pct(tot, 0.9), max(tot)))
+          % (sum(tot) / 60.0, sum(tot) / n, pct(tot, 0.5), pct(tot, 0.9), max(tot)))
     ts = sum(r['tools'] for r in rows)
-    ms = sum(r['model'] for r in rows)
+    ms = sum(r['model_s'] for r in rows)
     share = 100 * ts / (ts + ms) if (ts + ms) > 0 else 0
     print('Из них инструменты: %.0f мин (%.0f%%), модель: %.0f мин (%.0f%%).' % (ts / 60.0, share, ms / 60.0, 100 - share))
     print('Вызовов инструментов: всего %d, на ход в среднем %.1f, максимум %d.'
-          % (sum(r['calls'] for r in rows), sum(r['calls'] for r in rows) / float(len(rows)),
-             max(r['calls'] for r in rows)))
+          % (sum(r['calls'] for r in rows), sum(r['calls'] for r in rows) / float(n), max(r['calls'] for r in rows)))
+
+    tin = sum(r['tin'] for r in rows); cre = sum(r['cread'] for r in rows)
+    cwr = sum(r['cwrite'] for r in rows); out = sum(r['tout'] for r in rows)
+    thi = sum(r['think'] for r in rows); req = sum(r['req'] for r in rows)
+    allin = tin + cre + cwr
+    print('\nТокены: вход %.1f млн (свежий %.0f тыс., из кэша %.1f млн, запись кэша %.0f тыс.), выход %.0f тыс.'
+          % (allin / 1e6, tin / 1e3, cre / 1e6, cwr / 1e3, out / 1e3))
+    print('На ход в среднем: вход %.0f тыс., выход %.1f тыс., из них размышление %.1f тыс. (%.0f%% выхода).'
+          % (allin / n / 1e3, out / n / 1e3, thi / n / 1e3, 100 * thi / out if out else 0))
+    print('Запросов к модели: %d, на ход в среднем %.1f (каждый запрос заново подаёт весь контекст).'
+          % (req, req / float(n)))
+
+    print('\nЧем работали:')
+    for key, label in (('model', 'модель'), ('effort', 'усилие'), ('speed', 'скорость')):
+        vals = counts(rows, key)
+        print('  %-9s %s' % (label, ', '.join('%s — %d ход.' % (v, c) for v, c in vals[:4])))
 
     names = {}
     for r in rows:
         for part in r['names'].split():
             if '*' in part:
-                n, c = part.rsplit('*', 1)
+                nm, c = part.rsplit('*', 1)
                 try:
-                    names[n] = names.get(n, 0) + int(c)
+                    names[nm] = names.get(nm, 0) + int(c)
                 except ValueError:
                     pass
     if names:
         print('\nЧем пользовались (вызовов):')
-        for n, c in sorted(names.items(), key=lambda kv: (-kv[1], kv[0]))[:12]:
-            print('  %-22s %d' % (n, c))
+        for nm, c in sorted(names.items(), key=lambda kv: (-kv[1], kv[0]))[:12]:
+            print('  %-22s %d' % (nm, c))
 
     look = {}
     for r in rows:
@@ -91,18 +118,26 @@ def main():
             print('  %-28s в %d ходах' % (t[:28], c))
 
     print('\nСамые долгие ходы:')
-    print('  %-19s %7s %7s %7s %5s  %s' % ('начало', 'всего', 'инстр', 'модель', 'выз', 'вопрос'))
+    print('  %-19s %6s %6s %6s %4s %8s  %s' % ('начало', 'всего', 'инстр', 'модель', 'выз', 'токенов', 'вопрос'))
     for r in sorted(rows, key=lambda x: -x['total'])[:10]:
-        print('  %-19s %7.0f %7.0f %7.0f %5d  %s' % (r['when'], r['total'], r['tools'], r['model'],
-                                                     r['calls'], r['ask'][:60]))
+        print('  %-19s %6.0f %6.0f %6.0f %4d %8d  %s'
+              % (r['when'], r['total'], r['tools'], r['model_s'], r['calls'],
+                 r['tin'] + r['cread'] + r['cwrite'] + r['tout'], r['ask'][:50]))
+
+    print('\nСамые дорогие ходы (по токенам):')
+    for r in sorted(rows, key=lambda x: -(x['tin'] + x['cread'] + x['cwrite'] + x['tout']))[:5]:
+        print('  %-19s %8d токенов, запросов %2d, выход %5d  %s'
+              % (r['when'], r['tin'] + r['cread'] + r['cwrite'] + r['tout'], r['req'], r['tout'], r['ask'][:50]))
 
     slow = [r for r in rows if r['total'] >= 120]
     heavy = [r for r in rows if r['calls'] >= 25]
-    thinky = [r for r in rows if r['model'] >= 90 and r['calls'] <= 5]
+    thinky = [r for r in rows if r['model_s'] >= 90 and r['calls'] <= 5]
+    ctx = [r for r in rows if r['req'] and (r['cread'] + r['cwrite']) / float(r['req']) >= 150000]
     print('\nПризнаки:')
-    print('  ходов дольше 2 мин: %d из %d' % (len(slow), len(rows)))
+    print('  ходов дольше 2 мин: %d из %d' % (len(slow), n))
     print('  ходов с 25+ вызовами: %d' % len(heavy))
     print('  ходов, где долго думала модель при 5 и меньше вызовах: %d' % len(thinky))
+    print('  ходов, где в каждый запрос уходило 150 тыс. токенов и больше (контекст раздут): %d' % len(ctx))
 
 
 if __name__ == '__main__':

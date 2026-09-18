@@ -244,23 +244,31 @@ def scenarios(impl, ps, tmp):
     def iso(t):
         return time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime(t)) + '.000Z'
 
-    def use(t, tid, name, inp):
-        return {'type': 'assistant', 'timestamp': iso(t),
-                'message': {'content': [{'type': 'tool_use', 'id': tid, 'name': name, 'input': inp}]}}
+    def usage(inp, out, think, cread, cwrite):
+        return {'input_tokens': inp, 'output_tokens': out, 'cache_read_input_tokens': cread,
+                'cache_creation_input_tokens': cwrite, 'speed': 'standard',
+                'output_tokens_details': {'thinking_tokens': think}}
+
+    def use(t, tid, name, inp, u):
+        return {'type': 'assistant', 'timestamp': iso(t), 'effort': 'high',
+                'message': {'model': 'claude-opus-5', 'usage': u,
+                            'content': [{'type': 'tool_use', 'id': tid, 'name': name, 'input': inp}]}}
 
     def res(t, tid):
         return {'type': 'user', 'timestamp': iso(t),
                 'message': {'content': [{'type': 'tool_result', 'tool_use_id': tid, 'content': 'ok'}]}}
 
-    recs = [{'type': 'assistant', 'timestamp': iso(t0 - 600),
-             'message': {'content': [{'type': 'tool_use', 'id': 'old', 'name': 'Read',
-                                      'input': {'file_path': '/tmp/prev.txt'}}]}},
-            use(t0 + 2, 'a1', 'Bash', {'command': 'grep -n foo src/app.py'}),
+    recs = [use(t0 - 600, 'old', 'Read', {'file_path': '/tmp/prev.txt'}, usage(9, 9, 9, 9, 9)),
+            use(t0 + 2, 'a1', 'Bash', {'command': 'grep -n foo src/app.py'}, usage(10, 100, 40, 1000, 500)),
             res(t0 + 9, 'a1'),
-            use(t0 + 12, 'a2', 'Read', {'file_path': os.path.join(r, 'docs', 'ai', 'STATE.md')}),
+            use(t0 + 12, 'a2', 'Read', {'file_path': os.path.join(r, 'docs', 'ai', 'STATE.md')},
+                usage(5, 50, 10, 2000, 0)),
             res(t0 + 13, 'a2'),
-            use(t0 + 20, 'a3', 'WebSearch', {'query': 'shadcn dashboard template'}),
-            res(t0 + 34, 'a3')]
+            use(t0 + 20, 'a3', 'WebSearch', {'query': 'shadcn dashboard template'}, usage(5, 50, 0, 3000, 0)),
+            res(t0 + 34, 'a3'),
+            {'type': 'assistant', 'timestamp': iso(t0 + 38), 'effort': 'high',
+             'message': {'model': 'claude-opus-5', 'usage': usage(1, 200, 30, 4000, 0),
+                         'content': [{'type': 'text', 'text': 'готово'}]}}]
     with open(tr, 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(json.dumps(x, ensure_ascii=False) for x in recs) + '\n')
     tdata = {'session_id': s7, 'cwd': r, 'prompt': 'почему   ответ идёт так долго; посмотри',
@@ -289,17 +297,28 @@ def scenarios(impl, ps, tmp):
     except Exception:
         pass
     check('хронометраж: файл и заголовок', rows and rows[0].startswith('начало;всего_с'), rows[:1])
+    check('хронометраж: заголовок со столбцами токенов', rows and 'вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т' in rows[0], rows[:1])
     cells = rows[1].split(';') if len(rows) > 1 else []
     check('хронометраж: одна строка на ход', len(rows) == 2, len(rows))
+    check('хронометраж: столбцов ровно столько же, сколько в заголовке',
+          rows and len(cells) == len(rows[0].split(';')), len(cells))
     check('хронометраж: всего секунд посчитано', len(cells) > 1 and 39.0 <= float(cells[1] or 0) <= 60.0, cells[1:2])
     check('хронометраж: время инструментов посчитано', len(cells) > 2 and abs(float(cells[2] or 0) - 22.0) < 1.5, cells[2:3])
     check('хронометраж: время модели = всего минус инструменты',
           len(cells) > 3 and abs(float(cells[1]) - float(cells[2]) - float(cells[3])) < 0.2, cells[1:4])
     check('хронометраж: чужой ход не попал', len(cells) > 4 and cells[4] == '3', cells[4:5])
-    check('хронометраж: инструменты названы', len(cells) > 5 and 'Bash*1' in cells[5] and 'WebSearch*1' in cells[5], cells[5:6])
-    check('хронометраж: куда смотрел', len(cells) > 6 and 'STATE.md' in cells[6] and 'grep' in cells[6], cells[6:7])
-    check('хронометраж: вопрос владельца', len(cells) > 7 and 'почему ответ идёт так долго' in cells[7], cells[7:8])
-    check('хронометраж: точка с запятой убрана из вопроса', len(cells) == 8, len(cells))
+    check('хронометраж: запросов к модели посчитано', len(cells) > 5 and cells[5] == '4', cells[5:6])
+    check('хронометраж: токены входа сложены', len(cells) > 6 and cells[6] == '21', cells[6:7])
+    check('хронометраж: чтение кэша сложено', len(cells) > 7 and cells[7] == '10000', cells[7:8])
+    check('хронометраж: запись кэша сложена', len(cells) > 8 and cells[8] == '500', cells[8:9])
+    check('хронометраж: токены выхода сложены', len(cells) > 9 and cells[9] == '400', cells[9:10])
+    check('хронометраж: токены размышления сложены', len(cells) > 10 and cells[10] == '80', cells[10:11])
+    check('хронометраж: модель названа', len(cells) > 11 and cells[11] == 'opus-5', cells[11:12])
+    check('хронометраж: усилие записано', len(cells) > 12 and cells[12] == 'high', cells[12:13])
+    check('хронометраж: скорость записана', len(cells) > 13 and cells[13] == 'standard', cells[13:14])
+    check('хронометраж: инструменты названы', len(cells) > 14 and 'Bash*1' in cells[14] and 'WebSearch*1' in cells[14], cells[14:15])
+    check('хронометраж: куда смотрел', len(cells) > 15 and 'STATE.md' in cells[15] and 'grep' in cells[15], cells[15:16])
+    check('хронометраж: вопрос владельца', len(cells) > 16 and 'почему ответ идёт так долго' in cells[16], cells[16:17])
     back_date()
     S('хронометраж: повторный Stop', 'check-docs', {'session_id': s7, 'stop_hook_active': True, 'transcript_path': tr}, r, 'allow')
     try:
@@ -307,6 +326,29 @@ def scenarios(impl, ps, tmp):
     except Exception:
         rows2 = []
     check('хронометраж: строка заменяется, а не двоится', len(rows2) == 2, len(rows2))
+    # второй ход дописывается, старые строки остаются
+    s7b = s7 + '-b'
+    S('хронометраж: второй ход', 'turn-start', dict(tdata, session_id=s7b, prompt='а теперь другой вопрос про панель'), r, 'ctx')
+    S('хронометраж: конец второго хода', 'check-docs', {'session_id': s7b, 'transcript_path': tr}, r, 'allow')
+    try:
+        rows3 = [x for x in open(csvf, encoding='utf-8-sig').read().split('\n') if x.strip()]
+    except Exception:
+        rows3 = []
+    check('хронометраж: лог растёт, прошлые ходы на месте',
+          len(rows3) == 3 and rows3[1] == rows2[1], len(rows3))
+    # сменились столбцы — старый файл откладывается, новый начинается с заголовка
+    with open(csvf, 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write('старый;заголовок\n2026-01-01 00:00:00;1\n')
+    back_date()
+    S('хронометраж: старые столбцы', 'check-docs', {'session_id': s7, 'transcript_path': tr}, r, 'allow')
+    try:
+        rows4 = [x for x in open(csvf, encoding='utf-8-sig').read().split('\n') if x.strip()]
+    except Exception:
+        rows4 = []
+    check('хронометраж: при смене столбцов новый файл с заголовком',
+          len(rows4) == 2 and rows4[0].startswith('начало;всего_с'), rows4[:1])
+    check('хронометраж: старый файл отложен, не потерян',
+          os.path.isfile(os.path.join(r, 'docs', 'ai', 'timing.old.csv')), '')
 
     # версия набора: отпечатки, план обновления, уведомление о новой версии
     kit = os.path.dirname(os.path.dirname(HOOKS))

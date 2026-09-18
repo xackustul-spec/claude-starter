@@ -649,10 +649,10 @@ function Get-ChoiceHint([string]$prompt) {
 }
 # ------------------------------------------------------------------ хронометраж
 # Строка на каждый ответ: когда начали, сколько всего, сколько ждали инструменты,
-# сколько думала модель, какие инструменты и куда смотрели, и сам вопрос владельца.
-$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;инструменты;куда смотрел;вопрос'
+# сколько думала модель, сколько токенов ушло, чем работали (модель, усилие, скорость),
+# какие инструменты, куда смотрели и сам вопрос владельца. Файл только растёт.
+$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;модель;усилие;скорость;инструменты;куда смотрел;вопрос'
 $script:TimingTail = 1500000
-$script:TimingRows = 4000
 $script:TimingSlow = 120.0
 $script:Inv = [System.Globalization.CultureInfo]::InvariantCulture
 function Get-NowSec { return ([double][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()) / 1000.0 }
@@ -678,6 +678,11 @@ function Get-Cut([string]$s, [int]$n) {
     if ([string]::IsNullOrEmpty($s)) { return '' }
     if ($s.Length -le $n) { return $s }
     return $s.Substring(0, $n)
+}
+function Get-IntProp($obj, [string]$name) {
+    $v = Get-Prop $obj $name
+    if ($null -eq $v) { return 0 }
+    try { return [int]$v } catch { return 0 }
 }
 function Get-ToolTarget($inp) {
     # «Куда смотрел»: файл, адрес, запрос или команда — одним коротким словом.
@@ -714,8 +719,9 @@ function Get-ToolTarget($inp) {
     return ''
 }
 function Get-TurnTools([string]$path, [double]$since) {
-    # Хвост расшифровки: вызовы инструментов этого хода и время их ответов.
-    $out = @{ uses = @(); results = @{} }
+    # Хвост расшифровки: вызовы инструментов этого хода, время их ответов и расход токенов.
+    $out = @{ uses = @(); results = @{};
+              st = @{ req = 0; 'in' = 0; out = 0; think = 0; cread = 0; cwrite = 0; model = ''; effort = ''; speed = '' } }
     if ([string]::IsNullOrWhiteSpace($path)) { return $out }
     $raw = ''
     try {
@@ -732,14 +738,32 @@ function Get-TurnTools([string]$path, [double]$since) {
     } catch { return $out }
     $uses = @()
     foreach ($line in ($raw -split "`n")) {
-        # Разбираем только строки с вызовами инструментов: остальные (текст ответа) дороги и не нужны.
-        if ($line.IndexOf('tool_use') -lt 0) { continue }
+        # Разбираем только строки с вызовами инструментов и с расходом токенов.
+        if ($line.IndexOf('tool_use') -lt 0 -and $line.IndexOf('"usage"') -lt 0) { continue }
         $rec = $null
         try { $rec = $line | ConvertFrom-Json } catch { continue }
         $ts = Get-IsoTs (Get-Prop $rec 'timestamp')
         if (($null -eq $ts) -or ($ts -lt $since)) { continue }
+        $msg = Get-Prop $rec 'message'
+        $usage = Get-Prop $msg 'usage'
+        if ($null -ne $usage) {
+            $out.st.req += 1
+            $out.st['in'] += (Get-IntProp $usage 'input_tokens')
+            $out.st.out += (Get-IntProp $usage 'output_tokens')
+            $out.st.cread += (Get-IntProp $usage 'cache_read_input_tokens')
+            $out.st.cwrite += (Get-IntProp $usage 'cache_creation_input_tokens')
+            $det = Get-Prop $usage 'output_tokens_details'
+            if ($null -ne $det) { $out.st.think += (Get-IntProp $det 'thinking_tokens') }
+            $sp = [string](Get-Prop $usage 'speed')
+            if ($sp) { $out.st.speed = $sp }
+            $md = [string](Get-Prop $msg 'model')
+            if ($md) { $out.st.model = $md.Replace('claude-', '') }
+        }
+        $eff = Get-Prop $rec 'perTurnEffort'
+        if ($null -eq $eff) { $eff = Get-Prop $rec 'effort' }
+        if ($eff) { $out.st.effort = [string]$eff }
         # @() обязательно: PowerShell разворачивает массив из одного элемента при возврате из функции.
-        $content = @(Get-Prop (Get-Prop $rec 'message') 'content')
+        $content = @(Get-Prop $msg 'content')
         foreach ($b in $content) {
             if ($null -eq $b -or $b -is [string]) { continue }
             $type = [string](Get-Prop $b 'type')
@@ -783,11 +807,15 @@ function Get-TimingRow($data, $snap) {
     foreach ($k in (Sort-Ordinal @($names.Keys))) { $pairs += [pscustomobject]@{ N = $k; C = [int]$names[$k] } }
     $top = ((@($pairs | Sort-Object -Property @{ Expression = 'C'; Descending = $true } | Select-Object -First 6) | ForEach-Object { $_.N + '*' + $_.C }) -join ' ')
     $when = [DateTimeOffset]::FromUnixTimeMilliseconds([long]([Math]::Round($start * 1000))).ToLocalTime().ToString('yyyy-MM-dd HH:mm:ss', $script:Inv)
+    $st = $tt.st
     $cells = @($when,
         $total.ToString('0.0', $script:Inv),
         $toolS.ToString('0.0', $script:Inv),
         ($total - $toolS).ToString('0.0', $script:Inv),
         [string]$calls,
+        [string]$st.req, [string]$st['in'], [string]$st.cread, [string]$st.cwrite,
+        [string]$st.out, [string]$st.think,
+        (Get-CsvCell $st.model), (Get-CsvCell $st.effort), (Get-CsvCell $st.speed),
         (Get-CsvCell $top),
         (Get-Cut (Get-CsvCell (@($targets | Select-Object -First 12) -join ' ')) 180),
         (Get-Cut (Get-CsvCell (Get-Prop $snap 'prompt')) 140))
@@ -796,8 +824,46 @@ function Get-TimingRow($data, $snap) {
 function Get-TimingPath([string]$root) {
     return (Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'timing.csv')
 }
+function Get-TimingTail([string]$path, [int]$limit) {
+    # Последние строки растущего файла без чтения его целиком.
+    if (-not [System.IO.File]::Exists($path)) { return @() }
+    try {
+        $len = (New-Object System.IO.FileInfo $path).Length
+        $back = [Math]::Min($len, [Math]::Max(4096, $limit * 400))
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            if ($back -lt $len) { [void]$fs.Seek($len - $back, [System.IO.SeekOrigin]::Begin) }
+            $sr = New-Object System.IO.StreamReader($fs, $script:Utf8)
+            if ($back -lt $len) { [void]$sr.ReadLine() }
+            $text = $sr.ReadToEnd()
+        } finally { $fs.Dispose() }
+        $rows = @(($text -split "`n") | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Trim() -and -not $_.StartsWith('начало;') })
+        return @($rows | Select-Object -Last $limit)
+    } catch { return @() }
+}
+function Get-TimingSameTurn([string]$path, [string]$key) {
+    # Смещение начала последней строки, если она про тот же ход; иначе $null.
+    try {
+        $len = (New-Object System.IO.FileInfo $path).Length
+        $back = [Math]::Min($len, 8192)
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            [void]$fs.Seek($len - $back, [System.IO.SeekOrigin]::Begin)
+            $buf = New-Object byte[] $back
+            [void]$fs.Read($buf, 0, $back)
+        } finally { $fs.Dispose() }
+        $text = $script:Utf8.GetString($buf)
+        $lines = @($text -split "`n")
+        if ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq '') { $lines = @($lines | Select-Object -First ($lines.Count - 1)) }
+        if ($lines.Count -eq 0) { return $null }
+        $last = $lines[$lines.Count - 1]
+        if (-not $last.StartsWith($key + ';')) { return $null }
+        return $len - ($script:Utf8.GetByteCount($last) + 1)
+    } catch { return $null }
+}
 function Write-Timing($data, [string]$root) {
     # Вызывается при завершении ответа; повторный вызов того же хода строку заменяет.
+    # Файл только растёт: старые ходы не стираются, чтобы по ним можно было смотреть историю.
     if (-not [System.IO.Directory]::Exists((Join-Path (Join-Path $root 'docs') 'ai'))) { return }
     $snap = $null
     try {
@@ -810,47 +876,52 @@ function Write-Timing($data, [string]$root) {
     if (-not $row) { return }
     $path = Get-TimingPath $root
     try {
-        $lines = @()
         if ([System.IO.File]::Exists($path)) {
-            $txt = [System.IO.File]::ReadAllText($path, $script:Utf8)
-            $lines = @(($txt -split "`n") | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Trim() })
+            $first = ''
+            $sr = New-Object System.IO.StreamReader($path, $script:Utf8)
+            try { $first = ([string]$sr.ReadLine()).TrimEnd("`r").TrimStart([char]0xFEFF) } finally { $sr.Dispose() }
+            if ($first -ne $script:TimingHead) {
+                # Колонки сменились: старый файл отложить целиком, новый начать с заголовка.
+                $old = Join-Path (Split-Path -Parent $path) 'timing.old.csv'
+                if ([System.IO.File]::Exists($old)) { [System.IO.File]::Delete($old) }
+                [System.IO.File]::Move($path, $old)
+            }
         }
-        if ($lines.Count -eq 0 -or -not $lines[0].StartsWith('начало')) { $lines = @($script:TimingHead) + $lines }
-        if ($lines.Count -gt 1 -and (@($lines[$lines.Count - 1] -split ';')[0] -eq @($row -split ';')[0])) {
-            $lines = @($lines | Select-Object -First ($lines.Count - 1))
+        if (-not [System.IO.File]::Exists($path)) {
+            [System.IO.File]::WriteAllText($path, ($script:TimingHead + "`n"), $script:Utf8)
         }
-        $lines += $row
-        if ($lines.Count -gt $script:TimingRows) {
-            $lines = @($lines[0]) + @($lines | Select-Object -Last ($script:TimingRows - 1))
+        $cut = Get-TimingSameTurn $path (@($row -split ';')[0])
+        if ($null -ne $cut) {
+            $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+            try { $fs.SetLength([long]$cut) } finally { $fs.Dispose() }
         }
-        [System.IO.File]::WriteAllText($path, (($lines -join "`n") + "`n"), $script:Utf8)
+        $bytes = $script:Utf8.GetBytes($row + "`n")
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
     } catch {}
 }
 function Get-TimingNotice([string]$root) {
     # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
-    $path = Get-TimingPath $root
-    if (-not [System.IO.File]::Exists($path)) { return $null }
-    $rows = @()
-    try {
-        $txt = [System.IO.File]::ReadAllText($path, $script:Utf8)
-        $rows = @(($txt -split "`n") | ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_.Trim() } | Select-Object -Skip 1)
-    } catch { return $null }
-    $rows = @($rows | Select-Object -Last 20)
-    $tot = @(); $too = @()
-    foreach ($r in $rows) {
+    $tot = @(); $too = @(); $tok = @()
+    foreach ($r in (Get-TimingTail (Get-TimingPath $root) 20)) {
         $p = @($r -split ';')
-        if ($p.Count -lt 5) { continue }
-        try { $tot += [double]::Parse($p[1], $script:Inv); $too += [double]::Parse($p[2], $script:Inv) } catch {}
+        if ($p.Count -lt 11) { continue }
+        try {
+            $tot += [double]::Parse($p[1], $script:Inv)
+            $too += [double]::Parse($p[2], $script:Inv)
+            $tok += ([double][int]$p[6] + [int]$p[7] + [int]$p[8] + [int]$p[9])
+        } catch {}
     }
     if ($tot.Count -lt 10) { return $null }
     $avg = ($tot | Measure-Object -Sum).Sum / $tot.Count
     $avgT = ($too | Measure-Object -Sum).Sum / $too.Count
+    $avgK = ($tok | Measure-Object -Sum).Sum / $tok.Count / 1000.0
     $share = 0
     if ($avg -gt 0) { $share = [int][Math]::Round(100 * $avgT / $avg) }
     $slow = @($tot | Where-Object { $_ -ge $script:TimingSlow }).Count
     $tail = ''
     if ($slow -ge 3) { $tail = ' Долгих (от 2 мин) — ' + $slow + ' из ' + $tot.Count + ': предложить владельцу /kit-timing.' }
-    return ('Хронометраж: последние ' + $tot.Count + ' ответов — в среднем ' + $avg.ToString('0', $script:Inv) + ' с, из них в инструментах ' + $avgT.ToString('0', $script:Inv) + ' с (' + $share + '%).' + $tail)
+    return ('Хронометраж: последние ' + $tot.Count + ' ответов — в среднем ' + $avg.ToString('0', $script:Inv) + ' с, из них в инструментах ' + $avgT.ToString('0', $script:Inv) + ' с (' + $share + '%), токенов на ход около ' + $avgK.ToString('0', $script:Inv) + ' тыс.' + $tail)
 }
 function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data

@@ -789,10 +789,11 @@ def choice_hint(prompt):
 
 # ------------------------------------------------------------------ хронометраж
 # Строка на каждый ответ: когда начали, сколько всего, сколько ждали инструменты,
-# сколько думала модель, какие инструменты и куда смотрели, и сам вопрос владельца.
-TIMING_HEAD = 'начало;всего_с;инструменты_с;модель_с;вызовов;инструменты;куда смотрел;вопрос'
+# сколько думала модель, сколько токенов ушло, чем работали (модель, усилие, скорость),
+# какие инструменты, куда смотрели и сам вопрос владельца. Файл только растёт.
+TIMING_HEAD = ('начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;'
+               'выход_т;думал_т;модель;усилие;скорость;инструменты;куда смотрел;вопрос')
 TIMING_TAIL = 1500000
-TIMING_ROWS = 4000
 TIMING_SLOW = 120.0
 
 
@@ -844,8 +845,10 @@ def tool_target(inp):
 
 
 def turn_tools(path, since):
-    # Хвост расшифровки: вызовы инструментов этого хода и время их ответов.
+    # Хвост расшифровки: вызовы инструментов этого хода, время их ответов и расход токенов.
     uses, results = {}, {}
+    st = {'req': 0, 'in': 0, 'out': 0, 'think': 0, 'cread': 0, 'cwrite': 0,
+          'model': '', 'effort': '', 'speed': ''}
     try:
         size = os.path.getsize(path)
         with open(path, 'rb') as fh:
@@ -854,10 +857,10 @@ def turn_tools(path, since):
                 fh.readline()
             raw = fh.read()
     except Exception:
-        return uses, results
+        return uses, results, st
     for line in raw.split(b'\n'):
-        # Разбираем только строки с вызовами инструментов: остальные (текст ответа) дороги и не нужны.
-        if b'tool_use' not in line:
+        # Разбираем только строки с вызовами инструментов и с расходом токенов.
+        if b'tool_use' not in line and b'"usage"' not in line:
             continue
         try:
             rec = json.loads(line.decode('utf-8', 'replace'))
@@ -868,7 +871,25 @@ def turn_tools(path, since):
         ts = iso_ts(rec.get('timestamp'))
         if ts is None or ts < since:
             continue
-        content = (rec.get('message') or {}).get('content') if isinstance(rec.get('message'), dict) else None
+        msg = rec.get('message') if isinstance(rec.get('message'), dict) else {}
+        usage = msg.get('usage')
+        if isinstance(usage, dict):
+            st['req'] += 1
+            st['in'] += int(usage.get('input_tokens') or 0)
+            st['out'] += int(usage.get('output_tokens') or 0)
+            st['cread'] += int(usage.get('cache_read_input_tokens') or 0)
+            st['cwrite'] += int(usage.get('cache_creation_input_tokens') or 0)
+            det = usage.get('output_tokens_details')
+            if isinstance(det, dict):
+                st['think'] += int(det.get('thinking_tokens') or 0)
+            if usage.get('speed'):
+                st['speed'] = str(usage['speed'])
+            if msg.get('model'):
+                st['model'] = str(msg['model']).replace('claude-', '')
+        eff = rec.get('perTurnEffort') or rec.get('effort')
+        if eff:
+            st['effort'] = str(eff)
+        content = msg.get('content')
         if not isinstance(content, list):
             continue
         for b in content:
@@ -880,7 +901,7 @@ def turn_tools(path, since):
                 tid = str(b.get('tool_use_id'))
                 if tid not in results or ts < results[tid]:
                     results[tid] = ts
-    return uses, results
+    return uses, results, st
 
 
 def csv_cell(text):
@@ -891,7 +912,7 @@ def timing_row(data, snap):
     start = float(snap.get('ts') or 0)
     total = max(0.0, time.time() - start)
     calls, tool_s, names, targets = 0, 0.0, {}, []
-    uses, results = turn_tools(str(data.get('transcript_path') or ''), start - 1.0)
+    uses, results, st = turn_tools(str(data.get('transcript_path') or ''), start - 1.0)
     for tid, (name, inp, ts) in sorted(uses.items(), key=lambda kv: kv[1][2]):
         calls += 1
         names[name] = names.get(name, 0) + 1
@@ -905,6 +926,9 @@ def timing_row(data, snap):
     top = ' '.join('%s*%d' % (n, c) for n, c in sorted(names.items(), key=lambda kv: (-kv[1], kv[0]))[:6])
     return ';'.join([time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)),
                      '%.1f' % total, '%.1f' % tool_s, '%.1f' % (total - tool_s), str(calls),
+                     str(st['req']), str(st['in']), str(st['cread']), str(st['cwrite']),
+                     str(st['out']), str(st['think']),
+                     csv_cell(st['model']), csv_cell(st['effort']), csv_cell(st['speed']),
                      csv_cell(top), csv_cell(' '.join(targets[:12]))[:180],
                      csv_cell(snap.get('prompt'))[:140]])
 
@@ -913,8 +937,47 @@ def timing_path(root):
     return os.path.join(root, 'docs', 'ai', 'timing.csv')
 
 
+def timing_tail(path, limit):
+    # Последние строки растущего файла без чтения его целиком.
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as fh:
+            back = min(size, max(4096, limit * 400))
+            fh.seek(size - back)
+            raw = fh.read()
+        text = raw.decode('utf-8-sig', 'replace')
+        if back < size:
+            text = text.split('\n', 1)[1] if '\n' in text else ''
+        rows = [x for x in text.split('\n') if x.strip() and not x.startswith('начало;')]
+        return rows[-limit:]
+    except Exception:
+        return []
+
+
+def timing_same_turn(path, key):
+    # Смещение начала последней строки, если она про тот же ход; иначе None.
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as fh:
+            back = min(size, 8192)
+            fh.seek(size - back)
+            tail = fh.read(back)
+        lines = tail.split(b'\n')
+        if lines and lines[-1] == b'':
+            lines.pop()
+        if not lines:
+            return None
+        last = lines[-1]
+        if not last.decode('utf-8', 'replace').startswith(key + ';'):
+            return None
+        return size - (len(last) + 1)
+    except Exception:
+        return None
+
+
 def write_timing(data, root):
     # Вызывается при завершении ответа; повторный вызов того же хода строку заменяет.
+    # Файл только растёт: старые ходы не стираются, чтобы по ним можно было смотреть историю.
     if not os.path.isdir(os.path.join(root, 'docs', 'ai')):
         return
     try:
@@ -929,38 +992,34 @@ def write_timing(data, root):
         return
     path = timing_path(root)
     try:
-        lines = []
         if os.path.isfile(path):
-            with open(path, encoding='utf-8-sig', errors='replace') as fh:
-                lines = [x for x in fh.read().split('\n') if x.strip()]
-        if not lines or not lines[0].startswith('начало'):
-            lines = [TIMING_HEAD] + lines
-        if len(lines) > 1 and lines[-1].split(';')[0] == row.split(';')[0]:
-            lines = lines[:-1]
-        lines.append(row)
-        if len(lines) > TIMING_ROWS:
-            lines = [lines[0]] + lines[-(TIMING_ROWS - 1):]
-        with open(path, 'w', encoding='utf-8', newline='\n') as fh:
-            fh.write('\n'.join(lines) + '\n')
+            with open(path, 'rb') as fh:
+                first = fh.readline().decode('utf-8-sig', 'replace').strip()
+            if first != TIMING_HEAD:
+                # Колонки сменились: старый файл отложить целиком, новый начать с заголовка.
+                os.replace(path, os.path.join(os.path.dirname(path), 'timing.old.csv'))
+        if not os.path.isfile(path):
+            with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+                fh.write(TIMING_HEAD + '\n')
+        cut = timing_same_turn(path, row.split(';')[0])
+        if cut is not None:
+            with open(path, 'r+b') as fh:
+                fh.truncate(cut)
+        with open(path, 'a', encoding='utf-8', newline='\n') as fh:
+            fh.write(row + '\n')
     except Exception:
         pass
 
 
 def timing_notice(root):
     # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
-    try:
-        with open(timing_path(root), encoding='utf-8-sig', errors='replace') as fh:
-            rows = [x for x in fh.read().split('\n') if x.strip()][1:]
-    except Exception:
-        return None
-    rows = rows[-20:]
     vals = []
-    for r in rows:
+    for r in timing_tail(timing_path(root), 20):
         p = r.split(';')
-        if len(p) < 5:
+        if len(p) < 11:
             continue
         try:
-            vals.append((float(p[1]), float(p[2])))
+            vals.append((float(p[1]), float(p[2]), int(p[6]) + int(p[7]) + int(p[8]), int(p[9])))
         except Exception:
             pass
     if len(vals) < 10:
@@ -968,10 +1027,11 @@ def timing_notice(root):
     total = sum(v[0] for v in vals) / len(vals)
     tools = sum(v[1] for v in vals) / len(vals)
     share = int(round(100 * tools / total)) if total > 0 else 0
+    tok = sum(v[2] + v[3] for v in vals) / len(vals) / 1000.0
     slow = len([v for v in vals if v[0] >= TIMING_SLOW])
     tail = ' Долгих (от 2 мин) — %d из %d: предложить владельцу /kit-timing.' % (slow, len(vals)) if slow >= 3 else ''
-    return 'Хронометраж: последние %d ответов — в среднем %.0f с, из них в инструментах %.0f с (%d%%).%s' % (
-        len(vals), total, tools, share, tail)
+    return ('Хронометраж: последние %d ответов — в среднем %.0f с, из них в инструментах %.0f с (%d%%), '
+            'токенов на ход около %.0f тыс.%s' % (len(vals), total, tools, share, tok, tail))
 
 
 def turn_start(data):
