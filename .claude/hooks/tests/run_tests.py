@@ -469,6 +469,25 @@ def scenarios(impl, ps, tmp):
         'file_path': r + '/a.py', 'content': 'имя = 1'}}, ensure_ascii=False).encode('utf-8')
     S('guard-cyrillic: JSON с BOM на входе', 'guard-cyrillic', bom_input, r, 'block')
 
+    # своя папка и оболочка: запись файла кода мимо проверок
+    S('оболочка: файл кода через heredoc — вопрос', 'guard-shell',
+      {'tool_input': {'command': 'cat > src/app.py <<EOF\nprint(1)\nEOF'}}, r, 'ask', 'через оболочку')
+    S('оболочка: Set-Content в .ts — вопрос', 'guard-shell',
+      {'tool_input': {'command': "Set-Content -Path src/util.ts -Value 'export const a = 1'"}}, r, 'ask', 'через оболочку')
+    S('оболочка: временный файл — молча', 'guard-shell',
+      {'tool_input': {'command': 'echo "x" > /tmp/scratch.py'}}, r, 'allow')
+    S('оболочка: вывод программы в .txt — молча', 'guard-shell',
+      {'tool_input': {'command': 'python manage.py check > out.txt'}}, r, 'allow')
+
+    # .ps1 с русским текстом без BOM (урок 17.09.2026)
+    write(r, 'tools/rus.ps1', '# Назначение: проверка\nWrite-Host "Привет"\n')
+    S('ps1: русский текст без BOM — блок', 'check-python', {'tool_input': {'file_path': r + '/tools/rus.ps1'}}, r,
+      'block', 'BOM')
+    write(r, 'tools/rus_bom.ps1', '# Назначение: проверка\nWrite-Host "Привет"\n', bom=True)
+    S('ps1: русский текст с BOM — можно', 'check-python', {'tool_input': {'file_path': r + '/tools/rus_bom.ps1'}}, r, 'allow')
+    write(r, 'tools/ascii.ps1', '# Purpose: check\nWrite-Host "ok"\n')
+    S('ps1: только латиница без BOM — можно', 'check-python', {'tool_input': {'file_path': r + '/tools/ascii.ps1'}}, r, 'allow')
+
     # check-python
     write(r, 'src/bad.py', 'def f(:\n')
     S('python: синтаксическая ошибка', 'check-python', {'tool_input': {'file_path': r + '/src/bad.py'}}, r, 'block', 'SyntaxError')

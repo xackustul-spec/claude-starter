@@ -156,6 +156,26 @@ INSTR_PATH_SHELL_RE = re.compile(r'(^|[\s/"\'=])(CLAUDE(\.local|\.starter)?\.md|
 WRITE_VERB_RE = re.compile(r'\b(sed\s+-[a-zA-Z]*i|perl\s+-[a-zA-Z]*i|tee|Set-Content|Out-File|Add-Content|New-Item|Copy-Item|Move-Item|Remove-Item|Rename-Item|Clear-Content|cp|mv|rm|ri|del|erase|chmod|chattr|attrib|truncate|ln|install|rsync|patch|git\s+(checkout|restore|apply|stash\s+pop)|python3?\s+-|dd|unzip|tar)\b|>|<<', re.I)
 
 
+# Урок 12.09.2026 (5 повторов): файл кода, записанный через оболочку, минует проверки кириллицы и правил.
+SHELL_WRITE_RE = re.compile(
+    r'(?:>>?|\b(?:tee|Set-Content|Out-File|Add-Content)\b[^|;&\n]{0,80}?)\s*[\'"]?'
+    r'([^\s\'";|&>]+\.(?:ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|php|go|rs|java|kt|rb|cs|swift|dart|'
+    r'sh|bash|ps1|sql|prisma|html|htm|css|scss|less))\b', re.I)
+
+
+def shell_write_target(cmd):
+    # Путь файла кода, в который пишет команда; временные каталоги не считаются.
+    for m in SHELL_WRITE_RE.finditer(cmd):
+        path = m.group(1)
+        low = path.replace('\\', '/').lower()
+        if low.startswith('/tmp/') or low.startswith('/var/tmp/') or '/temp/' in low or low.startswith('$env:temp'):
+            continue
+        if low.startswith('/dev/'):
+            continue
+        return path
+    return None
+
+
 def guard_shell(data):
     cmd = str((data.get('tool_input') or {}).get('command') or '')
     if not cmd.strip():
@@ -178,6 +198,11 @@ def guard_shell(data):
                 'Такие конструкции ломаются при передаче через оболочку. Запиши скрипт в файл (LF, ASCII-имя), '
                 "отправь scp в /tmp и выполни: ssh <сервер> 'bash /tmp/<файл>.sh' (см. правило .claude/rules/code.md).",
             ])
+    tgt = shell_write_target(cmd)
+    if tgt:
+        ask('Запись файла кода через оболочку: ' + tgt + '. Так обходятся проверки набора — кириллица в именах, '
+            'правила для этого типа файла, синтаксис. Пиши файлы инструментом Write или Edit; если нужно именно '
+            'командой (генерация, сборка), скажи владельцу зачем и получи «да».')
     if SECRET_RE.search(cmd):
         ask('Чтение секретов: значения ключей не выводить и не читать. Имена переменных взять из .env.example '
             'или спросить у владельца.')
@@ -755,8 +780,33 @@ def find_python():
     return [sys.executable] if sys.executable else None
 
 
+def check_ps1_bom(path):
+    # Урок 17.09.2026: .ps1 с русским текстом без BOM Windows PowerShell 5.1 читает как ANSI и падает.
+    try:
+        raw = open(path, 'rb').read()
+    except Exception:
+        return
+    if raw[:3] == b'\xef\xbb\xbf':
+        return
+    try:
+        txt = raw.decode('utf-8')
+    except Exception:
+        return
+    if not re.search(CYR, txt):
+        return
+    block(['В файле есть русский текст, а BOM нет: ' + path,
+           'Windows PowerShell 5.1 прочитает такой файл как ANSI и упадёт на разборе.',
+           'Добавь BOM одной командой (PowerShell): '
+           "$p='" + path + "'; [IO.File]::WriteAllText($p, [IO.File]::ReadAllText($p), "
+           '(New-Object Text.UTF8Encoding($true)))',
+           'Либо оставь в файле только латиницу.'])
+
+
 def check_python(data):
     path = str((data.get('tool_input') or {}).get('file_path') or '')
+    if path.lower().endswith('.ps1') and os.path.isfile(path):
+        check_ps1_bom(path)
+        return
     if not path.lower().endswith('.py') or not os.path.isfile(path):
         return
     py = find_python()

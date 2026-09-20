@@ -136,6 +136,18 @@ $script:SecretRe = '(^|[\s;|&(])(cat|less|more|head|tail|grep|rg|type|Get-Conten
 $script:InstrPathShellRe = '(^|[\s/"''=])(CLAUDE(\.local|\.starter)?\.md|AGENTS\.md|\.mcp\.json|\.claude\.json|\.claude[/\\](rules|skills|hooks|agents|output-styles|commands|plugins|settings)[\w./\\-]*)'
 $script:WriteVerbRe = '\b(sed\s+-[a-zA-Z]*i|perl\s+-[a-zA-Z]*i|tee|Set-Content|Out-File|Add-Content|New-Item|Copy-Item|Move-Item|Remove-Item|Rename-Item|Clear-Content|cp|mv|rm|ri|del|erase|chmod|chattr|attrib|truncate|ln|install|rsync|patch|git\s+(checkout|restore|apply|stash\s+pop)|python3?\s+-|dd|unzip|tar)\b|>|<<'
 
+# Урок 12.09.2026 (5 повторов): файл кода, записанный через оболочку, минует проверки кириллицы и правил.
+$script:ShellWriteRe = '(?:>>?|\b(?:tee|Set-Content|Out-File|Add-Content)\b[^|;&\n]{0,80}?)\s*[''"]?([^\s''";|&>]+\.(?:ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|php|go|rs|java|kt|rb|cs|swift|dart|sh|bash|ps1|sql|prisma|html|htm|css|scss|less))\b'
+function Get-ShellWriteTarget([string]$cmd) {
+    # Путь файла кода, в который пишет команда; временные каталоги не считаются.
+    foreach ($m in [regex]::Matches($cmd, $script:ShellWriteRe, 'IgnoreCase')) {
+        $p = $m.Groups[1].Value
+        $low = ($p -replace '\\', '/').ToLowerInvariant()
+        if ($low.StartsWith('/tmp/') -or $low.StartsWith('/var/tmp/') -or $low.Contains('/temp/') -or $low.StartsWith('$env:temp') -or $low.StartsWith('/dev/')) { continue }
+        return $p
+    }
+    return $null
+}
 function Invoke-GuardShell($data) {
     $cmd = [string](Get-Prop (Get-Prop $data 'tool_input') 'command')
     if ([string]::IsNullOrWhiteSpace($cmd)) { return }
@@ -152,6 +164,10 @@ function Invoke-GuardShell($data) {
                 "Такие конструкции ломаются при передаче через оболочку. Запиши скрипт в файл (LF, ASCII-имя), отправь scp в /tmp и выполни: ssh <сервер> 'bash /tmp/<файл>.sh' (см. правило .claude/rules/code.md)."
             )
         }
+    }
+    $tgt = Get-ShellWriteTarget $cmd
+    if ($tgt) {
+        Out-Ask ('Запись файла кода через оболочку: ' + $tgt + '. Так обходятся проверки набора — кириллица в именах, правила для этого типа файла, синтаксис. Пиши файлы инструментом Write или Edit; если нужно именно командой (генерация, сборка), скажи владельцу зачем и получи «да».')
     }
     if ($cmd -match $script:SecretRe) {
         Out-Ask 'Чтение секретов: значения ключей не выводить и не читать. Имена переменных взять из .env.example или спросить у владельца.'
@@ -627,8 +643,22 @@ function Find-Python {
     }
     return $null
 }
+function Test-Ps1Bom([string]$path) {
+    # Урок 17.09.2026: .ps1 с русским текстом без BOM Windows PowerShell 5.1 читает как ANSI и падает.
+    $raw = $null
+    try { $raw = [System.IO.File]::ReadAllBytes($path) } catch { return }
+    if ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF) { return }
+    $txt = ''
+    try { $txt = $script:Utf8.GetString($raw) } catch { return }
+    if (-not (Test-Re $txt $script:CYR)) { return }
+    Out-Block @(('В файле есть русский текст, а BOM нет: ' + $path),
+        'Windows PowerShell 5.1 прочитает такой файл как ANSI и упадёт на разборе.',
+        ("Добавь BOM одной командой (PowerShell): `$p='" + $path + "'; [IO.File]::WriteAllText(`$p, [IO.File]::ReadAllText(`$p), (New-Object Text.UTF8Encoding(`$true)))"),
+        'Либо оставь в файле только латиницу.')
+}
 function Invoke-CheckPython($data) {
     $path = [string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')
+    if ($path.ToLowerInvariant().EndsWith('.ps1') -and (Test-Path -LiteralPath $path)) { Test-Ps1Bom $path; return }
     if (-not $path.ToLowerInvariant().EndsWith('.py') -or -not (Test-Path -LiteralPath $path)) { return }
     $py = Find-Python; if ($null -eq $py) { return }
     $exe = $py.exe
