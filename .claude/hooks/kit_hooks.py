@@ -602,8 +602,41 @@ def guard_instructions(data):
         ask('Изменение инструкций Claude (' + path + '). Покажите владельцу, что меняется, и получите «да».')
 
 
+# --------------------------------------------- работа только в своей папке проекта
+def outside_project(path, root):
+    # Полный путь, если файл лежит вне папки проекта; иначе None. Временные каталоги не считаются.
+    p = str(path or '').strip()
+    if not p or re.match(r'^[a-z][a-z0-9+.-]*://', p, re.I):
+        return None
+    try:
+        full = os.path.abspath(os.path.expanduser(p))
+    except Exception:
+        return None
+    if rel_path(full, root) is not None:
+        return None
+    low = full.replace('\\', '/').lower().rstrip('/')
+    for t in (tempfile.gettempdir(), '/tmp', '/var/folders', '/private/var/folders'):
+        t = str(t or '').replace('\\', '/').lower().rstrip('/')
+        if t and (low == t or low.startswith(t + '/')):
+            return None
+    return full
+
+
+def guard_outside(data):
+    # Каждый проект работает в своей папке: файл снаружи — вопрос владельцу, даже при полном доверии.
+    ti = data.get('tool_input') or {}
+    root = project_dir(data)
+    full = outside_project(ti.get('file_path') or ti.get('path'), root)
+    if full is None:
+        return
+    ask('Файл вне папки проекта: ' + full + '. Папка этого проекта — ' + root + '. Каждый проект '
+        'работает только в своей папке: возьмите то же самое изнутри проекта, а если нужного здесь '
+        'нет — скажите владельцу, что понадобилось снаружи и зачем, и получите «да».')
+
+
 def pre_write(data):
-    # Один процесс на Write/Edit: кириллица (блок) → инструкции (вопрос) → правила в контекст.
+    # Один процесс на Write/Edit: чужая папка (вопрос) → кириллица (блок) → инструкции (вопрос) → правила.
+    guard_outside(data)
     guard_cyrillic(data)
     guard_instructions(data)
     rules_on_write(data)
@@ -792,7 +825,7 @@ def choice_hint(prompt):
 # сколько думала модель, сколько токенов ушло, чем работали (модель, усилие, скорость),
 # какие инструменты, куда смотрели и сам вопрос владельца. Файл только растёт.
 TIMING_HEAD = ('начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;'
-               'выход_т;думал_т;модель;усилие;скорость;инструменты;куда смотрел;вопрос')
+               'выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос')
 TIMING_TAIL = 1500000
 TIMING_SLOW = 120.0
 
@@ -908,10 +941,10 @@ def csv_cell(text):
     return re.sub(r'\s+', ' ', str(text or '')).replace(';', ',').strip()
 
 
-def timing_row(data, snap):
+def timing_row(data, snap, root):
     start = float(snap.get('ts') or 0)
     total = max(0.0, time.time() - start)
-    calls, tool_s, names, targets = 0, 0.0, {}, []
+    calls, tool_s, names, targets, outside = 0, 0.0, {}, [], []
     uses, results, st = turn_tools(str(data.get('transcript_path') or ''), start - 1.0)
     for tid, (name, inp, ts) in sorted(uses.items(), key=lambda kv: kv[1][2]):
         calls += 1
@@ -922,6 +955,10 @@ def timing_row(data, snap):
         tgt = tool_target(inp)
         if tgt and tgt not in targets:
             targets.append(tgt)
+        if isinstance(inp, dict):
+            out = outside_project(inp.get('file_path') or inp.get('path'), root)
+            if out and out not in outside:
+                outside.append(out)
     tool_s = min(tool_s, total)
     top = ' '.join('%s*%d' % (n, c) for n, c in sorted(names.items(), key=lambda kv: (-kv[1], kv[0]))[:6])
     return ';'.join([time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)),
@@ -929,6 +966,7 @@ def timing_row(data, snap):
                      str(st['req']), str(st['in']), str(st['cread']), str(st['cwrite']),
                      str(st['out']), str(st['think']),
                      csv_cell(st['model']), csv_cell(st['effort']), csv_cell(st['speed']),
+                     str(len(outside)),
                      csv_cell(top), csv_cell(' '.join(targets[:12]))[:180],
                      csv_cell(snap.get('prompt'))[:140]])
 
@@ -987,7 +1025,7 @@ def write_timing(data, root):
     if not snap.get('ts'):
         return
     try:
-        row = timing_row(data, snap)
+        row = timing_row(data, snap, root)
     except Exception:
         return
     path = timing_path(root)
@@ -1013,13 +1051,14 @@ def write_timing(data, root):
 
 def timing_notice(root):
     # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
-    vals = []
+    vals, outside = [], 0
     for r in timing_tail(timing_path(root), 20):
         p = r.split(';')
-        if len(p) < 11:
+        if len(p) < 15:
             continue
         try:
             vals.append((float(p[1]), float(p[2]), int(p[6]) + int(p[7]) + int(p[8]), int(p[9])))
+            outside += 1 if int(p[14]) > 0 else 0
         except Exception:
             pass
     if len(vals) < 10:
@@ -1030,6 +1069,9 @@ def timing_notice(root):
     tok = sum(v[2] + v[3] for v in vals) / len(vals) / 1000.0
     slow = len([v for v in vals if v[0] >= TIMING_SLOW])
     tail = ' Долгих (от 2 мин) — %d из %d: предложить владельцу /kit-timing.' % (slow, len(vals)) if slow >= 3 else ''
+    if outside:
+        tail += (' В %d ходах трогали файлы вне папки проекта — так нельзя, работать только в %s.'
+                 % (outside, root))
     return ('Хронометраж: последние %d ответов — в среднем %.0f с, из них в инструментах %.0f с (%d%%), '
             'токенов на ход около %.0f тыс.%s' % (len(vals), total, tools, share, tok, tail))
 

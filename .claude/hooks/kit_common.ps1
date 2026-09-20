@@ -513,8 +513,36 @@ function Invoke-GuardInstructions($data) {
         Out-Ask ('Изменение инструкций Claude (' + $path + '). Покажите владельцу, что меняется, и получите «да».')
     }
 }
+# --------------------------------------------- работа только в своей папке проекта
+function Get-OutsideProject([string]$path, [string]$root) {
+    # Полный путь, если файл лежит вне папки проекта; иначе $null. Временные каталоги не считаются.
+    if ([string]::IsNullOrWhiteSpace($path)) { return $null }
+    if ($path -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { return $null }
+    $full = $null
+    try { $full = [System.IO.Path]::GetFullPath($path) } catch { return $null }
+    if ($null -ne (Get-RelPath $full $root)) { return $null }
+    $low = (($full -replace '\\', '/').ToLowerInvariant()).TrimEnd('/')
+    $temps = @($env:TEMP, $env:TMP, [System.IO.Path]::GetTempPath(), '/tmp', '/var/folders')
+    foreach ($t in $temps) {
+        if ([string]::IsNullOrWhiteSpace($t)) { continue }
+        $t = ((([string]$t) -replace '\\', '/').ToLowerInvariant()).TrimEnd('/')
+        if ($low -eq $t -or $low.StartsWith($t + '/')) { return $null }
+    }
+    return $full
+}
+function Invoke-GuardOutside($data) {
+    # Каждый проект работает в своей папке: файл снаружи — вопрос владельцу, даже при полном доверии.
+    $ti = Get-Prop $data 'tool_input'
+    $path = [string](Get-Prop $ti 'file_path')
+    if (-not $path) { $path = [string](Get-Prop $ti 'path') }
+    $root = Get-ProjectDir $data
+    $full = Get-OutsideProject $path $root
+    if ($null -eq $full) { return }
+    Out-Ask ('Файл вне папки проекта: ' + $full + '. Папка этого проекта — ' + $root + '. Каждый проект работает только в своей папке: возьмите то же самое изнутри проекта, а если нужного здесь нет — скажите владельцу, что понадобилось снаружи и зачем, и получите «да».')
+}
 function Invoke-PreWrite($data) {
-    # Один процесс на Write/Edit: кириллица (блок) → инструкции (вопрос) → правила в контекст.
+    # Один процесс на Write/Edit: чужая папка (вопрос) → кириллица (блок) → инструкции (вопрос) → правила.
+    Invoke-GuardOutside $data
     Invoke-GuardCyrillic $data
     Invoke-GuardInstructions $data
     Invoke-RulesOnWrite $data
@@ -651,7 +679,7 @@ function Get-ChoiceHint([string]$prompt) {
 # Строка на каждый ответ: когда начали, сколько всего, сколько ждали инструменты,
 # сколько думала модель, сколько токенов ушло, чем работали (модель, усилие, скорость),
 # какие инструменты, куда смотрели и сам вопрос владельца. Файл только растёт.
-$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;модель;усилие;скорость;инструменты;куда смотрел;вопрос'
+$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос'
 $script:TimingTail = 1500000
 $script:TimingSlow = 120.0
 $script:Inv = [System.Globalization.CultureInfo]::InvariantCulture
@@ -782,12 +810,12 @@ function Get-TurnTools([string]$path, [double]$since) {
 function Get-CsvCell($text) {
     return ([regex]::Replace([string]$text, '\s+', ' ')).Replace(';', ',').Trim()
 }
-function Get-TimingRow($data, $snap) {
+function Get-TimingRow($data, $snap, [string]$root) {
     $start = 0.0
     try { $start = [double](Get-Prop $snap 'ts') } catch { $start = 0.0 }
     $total = (Get-NowSec) - $start
     if ($total -lt 0) { $total = 0.0 }
-    $calls = 0; $toolS = 0.0; $names = @{}; $targets = @()
+    $calls = 0; $toolS = 0.0; $names = @{}; $targets = @(); $outside = @()
     $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) ($start - 1.0)
     $seen = @{}
     foreach ($u in @($tt.uses | Sort-Object Ts)) {
@@ -801,6 +829,10 @@ function Get-TimingRow($data, $snap) {
         }
         $tgt = Get-ToolTarget $u.Input
         if ($tgt -and ($targets -notcontains $tgt)) { $targets += $tgt }
+        $fp = [string](Get-Prop $u.Input 'file_path')
+        if (-not $fp) { $fp = [string](Get-Prop $u.Input 'path') }
+        $out = Get-OutsideProject $fp $root
+        if ($out -and ($outside -notcontains $out)) { $outside += $out }
     }
     if ($toolS -gt $total) { $toolS = $total }
     $pairs = @()
@@ -816,6 +848,7 @@ function Get-TimingRow($data, $snap) {
         [string]$st.req, [string]$st['in'], [string]$st.cread, [string]$st.cwrite,
         [string]$st.out, [string]$st.think,
         (Get-CsvCell $st.model), (Get-CsvCell $st.effort), (Get-CsvCell $st.speed),
+        [string]@($outside).Count,
         (Get-CsvCell $top),
         (Get-Cut (Get-CsvCell (@($targets | Select-Object -First 12) -join ' ')) 180),
         (Get-Cut (Get-CsvCell (Get-Prop $snap 'prompt')) 140))
@@ -872,7 +905,7 @@ function Write-Timing($data, [string]$root) {
     } catch { $snap = $null }
     if ($null -eq $snap -or -not (Get-Prop $snap 'ts')) { return }
     $row = ''
-    try { $row = Get-TimingRow $data $snap } catch { return }
+    try { $row = Get-TimingRow $data $snap $root } catch { return }
     if (-not $row) { return }
     $path = Get-TimingPath $root
     try {
@@ -902,14 +935,15 @@ function Write-Timing($data, [string]$root) {
 }
 function Get-TimingNotice([string]$root) {
     # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
-    $tot = @(); $too = @(); $tok = @()
+    $tot = @(); $too = @(); $tok = @(); $outside = 0
     foreach ($r in (Get-TimingTail (Get-TimingPath $root) 20)) {
         $p = @($r -split ';')
-        if ($p.Count -lt 11) { continue }
+        if ($p.Count -lt 15) { continue }
         try {
             $tot += [double]::Parse($p[1], $script:Inv)
             $too += [double]::Parse($p[2], $script:Inv)
             $tok += ([double][int]$p[6] + [int]$p[7] + [int]$p[8] + [int]$p[9])
+            if ([int]$p[14] -gt 0) { $outside += 1 }
         } catch {}
     }
     if ($tot.Count -lt 10) { return $null }
@@ -921,6 +955,7 @@ function Get-TimingNotice([string]$root) {
     $slow = @($tot | Where-Object { $_ -ge $script:TimingSlow }).Count
     $tail = ''
     if ($slow -ge 3) { $tail = ' Долгих (от 2 мин) — ' + $slow + ' из ' + $tot.Count + ': предложить владельцу /kit-timing.' }
+    if ($outside -gt 0) { $tail += ' В ' + $outside + ' ходах трогали файлы вне папки проекта — так нельзя, работать только в ' + $root + '.' }
     return ('Хронометраж: последние ' + $tot.Count + ' ответов — в среднем ' + $avg.ToString('0', $script:Inv) + ' с, из них в инструментах ' + $avgT.ToString('0', $script:Inv) + ' с (' + $share + '%), токенов на ход около ' + $avgK.ToString('0', $script:Inv) + ' тыс.' + $tail)
 }
 function Invoke-TurnStart($data) {

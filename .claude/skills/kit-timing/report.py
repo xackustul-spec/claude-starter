@@ -6,9 +6,9 @@ import os
 import sys
 
 COLS = ['when', 'total', 'tools', 'model_s', 'calls', 'req', 'tin', 'cread', 'cwrite',
-        'tout', 'think', 'model', 'effort', 'speed', 'names', 'look', 'ask']
+        'tout', 'think', 'model', 'effort', 'speed', 'outside', 'names', 'look', 'ask']
 NUM = {'total': float, 'tools': float, 'model_s': float, 'calls': int, 'req': int,
-       'tin': int, 'cread': int, 'cwrite': int, 'tout': int, 'think': int}
+       'tin': int, 'cread': int, 'cwrite': int, 'tout': int, 'think': int, 'outside': int}
 
 
 def load(path):
@@ -138,6 +138,11 @@ def main():
     print('  ходов с 25+ вызовами: %d' % len(heavy))
     print('  ходов, где долго думала модель при 5 и меньше вызовах: %d' % len(thinky))
     print('  ходов, где в каждый запрос уходило 150 тыс. токенов и больше (контекст раздут): %d' % len(ctx))
+    out_turns = [r for r in rows if r['outside'] > 0]
+    if out_turns:
+        print('  ходов, где трогали файлы вне папки проекта: %d — так нельзя, назвать владельцу' % len(out_turns))
+        for r in out_turns[-5:]:
+            print('    %s  %s' % (r['when'], r['ask'][:60]))
 
 
 if __name__ == '__main__':

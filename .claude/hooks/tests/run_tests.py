@@ -266,6 +266,8 @@ def scenarios(impl, ps, tmp):
             res(t0 + 13, 'a2'),
             use(t0 + 20, 'a3', 'WebSearch', {'query': 'shadcn dashboard template'}, usage(5, 50, 0, 3000, 0)),
             res(t0 + 34, 'a3'),
+            use(t0 + 35, 'a4', 'Read', {'file_path': '/etc/hosts'}, usage(1, 10, 0, 100, 0)),
+            res(t0 + 36, 'a4'),
             {'type': 'assistant', 'timestamp': iso(t0 + 38), 'effort': 'high',
              'message': {'model': 'claude-opus-5', 'usage': usage(1, 200, 30, 4000, 0),
                          'content': [{'type': 'text', 'text': 'готово'}]}}]
@@ -303,22 +305,23 @@ def scenarios(impl, ps, tmp):
     check('хронометраж: столбцов ровно столько же, сколько в заголовке',
           rows and len(cells) == len(rows[0].split(';')), len(cells))
     check('хронометраж: всего секунд посчитано', len(cells) > 1 and 39.0 <= float(cells[1] or 0) <= 60.0, cells[1:2])
-    check('хронометраж: время инструментов посчитано', len(cells) > 2 and abs(float(cells[2] or 0) - 22.0) < 1.5, cells[2:3])
+    check('хронометраж: время инструментов посчитано', len(cells) > 2 and abs(float(cells[2] or 0) - 23.0) < 1.5, cells[2:3])
     check('хронометраж: время модели = всего минус инструменты',
           len(cells) > 3 and abs(float(cells[1]) - float(cells[2]) - float(cells[3])) < 0.2, cells[1:4])
-    check('хронометраж: чужой ход не попал', len(cells) > 4 and cells[4] == '3', cells[4:5])
-    check('хронометраж: запросов к модели посчитано', len(cells) > 5 and cells[5] == '4', cells[5:6])
-    check('хронометраж: токены входа сложены', len(cells) > 6 and cells[6] == '21', cells[6:7])
-    check('хронометраж: чтение кэша сложено', len(cells) > 7 and cells[7] == '10000', cells[7:8])
+    check('хронометраж: чужой ход не попал', len(cells) > 4 and cells[4] == '4', cells[4:5])
+    check('хронометраж: запросов к модели посчитано', len(cells) > 5 and cells[5] == '5', cells[5:6])
+    check('хронометраж: токены входа сложены', len(cells) > 6 and cells[6] == '22', cells[6:7])
+    check('хронометраж: чтение кэша сложено', len(cells) > 7 and cells[7] == '10100', cells[7:8])
     check('хронометраж: запись кэша сложена', len(cells) > 8 and cells[8] == '500', cells[8:9])
-    check('хронометраж: токены выхода сложены', len(cells) > 9 and cells[9] == '400', cells[9:10])
+    check('хронометраж: токены выхода сложены', len(cells) > 9 and cells[9] == '410', cells[9:10])
     check('хронометраж: токены размышления сложены', len(cells) > 10 and cells[10] == '80', cells[10:11])
     check('хронометраж: модель названа', len(cells) > 11 and cells[11] == 'opus-5', cells[11:12])
     check('хронометраж: усилие записано', len(cells) > 12 and cells[12] == 'high', cells[12:13])
     check('хронометраж: скорость записана', len(cells) > 13 and cells[13] == 'standard', cells[13:14])
-    check('хронометраж: инструменты названы', len(cells) > 14 and 'Bash*1' in cells[14] and 'WebSearch*1' in cells[14], cells[14:15])
-    check('хронометраж: куда смотрел', len(cells) > 15 and 'STATE.md' in cells[15] and 'grep' in cells[15], cells[15:16])
-    check('хронометраж: вопрос владельца', len(cells) > 16 and 'почему ответ идёт так долго' in cells[16], cells[16:17])
+    check('хронометраж: файлы вне папки проекта посчитаны', len(cells) > 14 and cells[14] == '1', cells[14:15])
+    check('хронометраж: инструменты названы', len(cells) > 15 and 'Bash*1' in cells[15] and 'WebSearch*1' in cells[15], cells[15:16])
+    check('хронометраж: куда смотрел', len(cells) > 16 and 'STATE.md' in cells[16] and 'grep' in cells[16], cells[16:17])
+    check('хронометраж: вопрос владельца', len(cells) > 17 and 'почему ответ идёт так долго' in cells[17], cells[17:18])
     back_date()
     S('хронометраж: повторный Stop', 'check-docs', {'session_id': s7, 'stop_hook_active': True, 'transcript_path': tr}, r, 'allow')
     try:
@@ -454,6 +457,14 @@ def scenarios(impl, ps, tmp):
       {'tool_name': 'Write', 'tool_input': {'file_path': r + '/.claude/rules/code.md', 'content': '# новое'}}, r, 'ask')
     S('pre-write: обычный .py — правила', 'pre-write',
       {'tool_name': 'Write', 'tool_input': {'file_path': r + '/app/main.py', 'content': '# Назначение: x\nprint("Привет")\n'}}, r, 'ctx', 'code.md')
+    S('своя папка: файл соседнего проекта — вопрос', 'pre-write',
+      {'tool_name': 'Write', 'tool_input': {'file_path': '/etc/hosts', 'content': 'x'}}, r, 'ask', 'вне папки проекта')
+    S('своя папка: документ соседней папки — вопрос', 'pre-write',
+      {'tool_name': 'Edit', 'tool_input': {'file_path': '/opt/чужое/СОСТОЯНИЕ.md', 'content': 'x'}}, r, 'ask', 'вне папки проекта')
+    S('своя папка: временный файл — молча', 'pre-write',
+      {'tool_name': 'Write', 'tool_input': {'file_path': os.path.join(tempfile.gettempdir(), 'scratch.txt'), 'content': 'x'}}, r, 'allow')
+    S('своя папка: файл внутри проекта — молча', 'pre-write',
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/app/ok.txt', 'content': 'x'}}, r, 'allow')
     bom_input = b'\xef\xbb\xbf' + json.dumps({'session_id': 'bom', 'cwd': r, 'tool_input': {
         'file_path': r + '/a.py', 'content': 'имя = 1'}}, ensure_ascii=False).encode('utf-8')
     S('guard-cyrillic: JSON с BOM на входе', 'guard-cyrillic', bom_input, r, 'block')
