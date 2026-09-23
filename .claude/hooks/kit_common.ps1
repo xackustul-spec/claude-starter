@@ -556,8 +556,25 @@ function Invoke-GuardOutside($data) {
     if ($null -eq $full) { return }
     Out-Ask ('Файл вне папки проекта: ' + $full + '. Папка этого проекта — ' + $root + '. Каждый проект работает только в своей папке: возьмите то же самое изнутри проекта, а если нужного здесь нет — скажите владельцу, что понадобилось снаружи и зачем, и получите «да».')
 }
+function Invoke-GuardDocsOnUpdate($data) {
+    # Обновление набора не трогает документы проекта — ни одной правки в docs/ai.
+    $root = Get-ProjectDir $data
+    if (-not (Test-UpdateMode $root)) { return }
+    $path = [string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')
+    if (-not $path) { return }
+    $full = ''
+    try { $full = [System.IO.Path]::GetFullPath($path) } catch { return }
+    $rel = Get-RelPath $full $root
+    if ($null -eq $rel) { return }
+    if (($rel -replace '\\', '/') -match '^docs/ai/') {
+        Out-Block @(('Идёт обновление набора (есть .claude/starter.lock), а правится документ проекта: ' + $rel),
+            'Обновление заменяет только файлы набора; docs/ai — ваши записи, их не трогают.',
+            'Закончи обновление, убери starter.lock, и только потом правь документы.')
+    }
+}
 function Invoke-PreWrite($data) {
-    # Один процесс на Write/Edit: чужая папка (вопрос) → кириллица (блок) → инструкции (вопрос) → правила.
+    # Один процесс на Write/Edit: обновление набора → чужая папка → кириллица → инструкции → правила.
+    Invoke-GuardDocsOnUpdate $data
     Invoke-GuardOutside $data
     Invoke-GuardCyrillic $data
     Invoke-GuardInstructions $data
@@ -965,6 +982,23 @@ function Write-Timing($data, [string]$root) {
         try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
     } catch {}
 }
+$script:CtxLimit = 200000
+function Get-ContextHint([string]$root) {
+    # Контекст на один запрос по последней записи лога; раздут — предложить закрыть тему.
+    # @() обязательно: одна строка возвращается как строка, и $rows[0] дал бы первый символ.
+    $rows = @(Get-TimingTail (Get-TimingPath $root) 1)
+    if ($rows.Count -eq 0) { return '' }
+    $p = @($rows[0] -split ';')
+    if ($p.Count -lt 11) { return '' }
+    $req = 0; $ctx = 0
+    try {
+        $req = [int]$p[5]
+        if ($req -lt 1) { return '' }
+        $ctx = ([double]([int]$p[6] + [int]$p[7] + [int]$p[8])) / $req
+    } catch { return '' }
+    if ($req -lt 2 -or $ctx -lt $script:CtxLimit) { return '' }
+    return ('Набор: контекст раздут — около ' + [int]($ctx / 1000) + ' тыс. токенов на каждый запрос в прошлом ходе. Дойдя до места, где можно остановиться (правка доведена, проверка показана), закрой тему скиллом kit-handover: дописать в документы всё, чего в них ещё нет, задать висящие вопросы владельцу сейчас, обновить «Сейчас» и «Следующий шаг», дать фразу для продолжения и предложить владельцу ввести /clear. Посреди начатой правки или незаданного вопроса не обрывать.')
+}
 function Get-TimingNotice([string]$root) {
     # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
     $tot = @(); $too = @(); $tok = @(); $outside = 0
@@ -1009,6 +1043,8 @@ function Invoke-TurnStart($data) {
     $prompt = ([string](Get-Prop $data 'prompt')).Trim()
     if ($prompt.StartsWith('/')) { return }
     if ($isExact) { Write-Out $script:ExactHint }
+    $ctxHint = Get-ContextHint $root
+    if ($ctxHint) { Write-Out $ctxHint }
     $hint = Get-ChoiceHint $prompt
     if ($hint) { foreach ($line in $hint) { Write-Out $line } }
     if ($prompt.Length -lt 12) { return }

@@ -659,8 +659,22 @@ def guard_outside(data):
         'нет — скажите владельцу, что понадобилось снаружи и зачем, и получите «да».')
 
 
+def guard_docs_on_update(data):
+    # Обновление набора не трогает документы проекта — ни одной правки в docs/ai.
+    root = project_dir(data)
+    if not update_mode(root):
+        return
+    path = str((data.get('tool_input') or {}).get('file_path') or '')
+    rel = rel_path(os.path.abspath(path), root) if path else None
+    if rel and re.match(r'docs/ai/', rel.replace('\\', '/'), re.I):
+        block(['Идёт обновление набора (есть .claude/starter.lock), а правится документ проекта: ' + rel,
+               'Обновление заменяет только файлы набора; docs/ai — ваши записи, их не трогают.',
+               'Закончи обновление, убери starter.lock, и только потом правь документы.'])
+
+
 def pre_write(data):
-    # Один процесс на Write/Edit: чужая папка (вопрос) → кириллица (блок) → инструкции (вопрос) → правила.
+    # Один процесс на Write/Edit: обновление набора → чужая папка → кириллица → инструкции → правила.
+    guard_docs_on_update(data)
     guard_outside(data)
     guard_cyrillic(data)
     guard_instructions(data)
@@ -1111,6 +1125,31 @@ def write_timing(data, root):
         pass
 
 
+CTX_LIMIT = 200000
+
+
+def context_hint(root):
+    # Контекст на один запрос по последней записи лога; раздут — предложить закрыть тему.
+    rows = timing_tail(timing_path(root), 1)
+    if not rows:
+        return ''
+    p = rows[0].split(';')
+    if len(p) < 11:
+        return ''
+    try:
+        req = int(p[5])
+        ctx = (int(p[6]) + int(p[7]) + int(p[8])) / max(1, req)
+    except Exception:
+        return ''
+    if req < 2 or ctx < CTX_LIMIT:
+        return ''
+    return ('Набор: контекст раздут — около %d тыс. токенов на каждый запрос в прошлом ходе. Дойдя до места, '
+            'где можно остановиться (правка доведена, проверка показана), закрой тему скиллом kit-handover: '
+            'дописать в документы всё, чего в них ещё нет, задать висящие вопросы владельцу сейчас, обновить '
+            '«Сейчас» и «Следующий шаг», дать фразу для продолжения и предложить владельцу ввести /clear. '
+            'Посреди начатой правки или незаданного вопроса не обрывать.\n' % (ctx / 1000))
+
+
 def timing_notice(root):
     # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
     vals, outside = [], 0
@@ -1160,6 +1199,9 @@ def turn_start(data):
         return
     if snap['exact']:
         sys.stdout.write(EXACT_HINT)
+    ctx = context_hint(root)
+    if ctx:
+        sys.stdout.write(ctx)
     hint = choice_hint(prompt)
     if hint:
         sys.stdout.write(hint)
