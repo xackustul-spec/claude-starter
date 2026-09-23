@@ -697,6 +697,8 @@ $script:ChoiceRe = 'покажи\s+вариант|дай\s+вариант|спи
 $script:NotItRe = 'не\s+то\b|не\s+подходит|не\s+нравится|не\s+этого\s+хотел|не\s+так\s+сделал|опять\s+не\s+то|вс[её]\s+не\s+то'
 $script:ChoiceHint = 'Набор: просят варианты. Порядок — SEARCH.md, «Как выдавать выбор»: слово понимать буквально (шаблон ≠ библиотека); идти в реестр с программным доступом (GitHub API, npm, PyPI), а не в память и не в один каталог; у каждого варианта только проверяемые поля из API — звёзды, лицензия, дата правки, адрес живой витрины; дать столько, сколько попросили; показывать витрины автора, а не свои превью; страница с поиском плюс верхушка списка прямо в ответе; отбор под стек — после показа всего; назвать своё мнение одним вариантом с причиной по делу; закончить одним шагом выбора. Бесплатное по умолчанию (SEARCH.md, «Деньги»).'
 $script:NotItHint = 'Набор: владельцу «не то». Своё в следующий раз не переделывать — искать чужое готовое (скилл tool-scout, §0) и показать варианты по порядку ниже.'
+$script:ExactRe = 'в\s*точности|дословно|я\s+(такого\s+)?не\s+говорил|не\s+просил|кто\s+(тебя\s+)?просил|отсебятин|от\s+себя|повторяю|в\s*\d+[-\s]*(й|ый|ой)\s*раз|сколько\s+раз|опять\s+придумыва|не\s+выдумывай|ничего\s+не\s+добавля|делай\s+(то\s+)?что\s+(тебе\s+)?говор|только\s+то,?\s+что\s+прош|не\s+надо\s+ничего\s+лишн'
+$script:ExactHint = 'Набор: владелец требует дословности. Порядок на этот ход: 1) выписать его просьбу по пунктам его словами; 2) сделать ровно это и ничего сверх — ни оформления, ни значка, ни рамки, ни колонки, ни подсказки, ни «заодно»; 3) против каждого пункта сказать, что сделано и чем доказано; 4) лишнее, добавленное раньше, удалить в этом же ходе; 5) формулировка непонятна — один короткий вопрос, а не догадка.'
 function Get-ChoiceHint([string]$prompt) {
     # Подсказка перед ответом: владелец просит варианты или говорит «не то».
     $notIt = $prompt -match $script:NotItRe
@@ -992,8 +994,10 @@ function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data
     $ts = 0
     try { $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } catch {}
-    $prompt0 = [regex]::Replace(([string](Get-Prop $data 'prompt')).Trim(), '\s+', ' ')
-    $snap = @{ ts = $ts; head = $null; status = @{}; prompt = (Get-Cut $prompt0 140) }
+    $promptRaw = [string](Get-Prop $data 'prompt')
+    $prompt0 = [regex]::Replace($promptRaw.Trim(), '\s+', ' ')
+    $isExact = [bool](Test-Re $promptRaw $script:ExactRe)
+    $snap = @{ ts = $ts; head = $null; status = @{}; exact = $isExact; prompt = (Get-Cut $prompt0 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -1004,6 +1008,7 @@ function Invoke-TurnStart($data) {
     try { ($snap | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'turn') -Encoding UTF8 } catch {}
     $prompt = ([string](Get-Prop $data 'prompt')).Trim()
     if ($prompt.StartsWith('/')) { return }
+    if ($isExact) { Write-Out $script:ExactHint }
     $hint = Get-ChoiceHint $prompt
     if ($hint) { foreach ($line in $hint) { Write-Out $line } }
     if ($prompt.Length -lt 12) { return }
@@ -1088,6 +1093,8 @@ function Invoke-CheckDocs($data) {
             try { $fi = New-Object System.IO.FileInfo -ArgumentList (Join-Path $top $f); if ($fi.Exists -and $fi.LastWriteTimeUtc -ge $cutoff) { [void]$touched.Add($f) } } catch {}
         }
     }
+    # Свой же лог хронометража не считается работой этого хода.
+    foreach ($f in @($touched)) { if ($f -match '(^|/)docs/ai/timing(\.old)?\.csv$') { [void]$touched.Remove($f) } }
     $code = @(); $docs = $false
     foreach ($f in (Sort-Ordinal @($touched))) {
         if ($now.ContainsKey($f) -and $now[$f][0].Contains('D')) { continue }
@@ -1096,7 +1103,11 @@ function Invoke-CheckDocs($data) {
         if (($script:HeaderExt -contains $ext) -and ($f -notmatch $script:Generated)) { $code += $f }
     }
     $alive = @($touched | Where-Object { -not ($now.ContainsKey($_) -and $now[$_][0].Contains('D')) })
-    $docMsgs = @(Get-DocProblems $root $top $alive)
+    $exactMsgs = @()
+    if (($null -ne $snap) -and (Get-Prop $snap 'exact') -and ($alive.Count -gt 0)) {
+        $exactMsgs += 'Владелец требовал сделать дословно. Прежде чем заканчивать: сверь по пунктам его словами, что просили и что сделано; всё, добавленное сверх просьбы (оформление, значок, рамка, пунктир, колонка, подсказка, блок, поле), удали сейчас; непонятное — один короткий вопрос. Сверил, лишнего нет — заканчивай ответ, владельцу про эту проверку не писать.'
+    }
+    $docMsgs = @($exactMsgs) + @(Get-DocProblems $root $top $alive)
     if ($code.Count -eq 0) {
         if ($docMsgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($docMsgs -join ' ')) }
         if ($touched.Count -gt 0) { Set-StateStamp $root $top }

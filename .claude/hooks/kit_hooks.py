@@ -861,6 +861,18 @@ NOT_IT_HINT = ('Набор: владельцу «не то». Своё в сле
                '(скилл tool-scout, §0) и показать варианты по порядку ниже.\n')
 
 
+EXACT_RE = re.compile(
+    'в\\s*точности|дословно|я\\s+(такого\\s+)?не\\s+говорил|не\\s+просил|кто\\s+(тебя\\s+)?просил|'
+    'отсебятин|от\\s+себя|повторяю|в\\s*\\d+[-\\s]*(й|ый|ой)\\s*раз|сколько\\s+раз|опять\\s+придумыва|'
+    'не\\s+выдумывай|ничего\\s+не\\s+добавля|делай\\s+(то\\s+)?что\\s+(тебе\\s+)?говор|'
+    'только\\s+то,?\\s+что\\s+прош|не\\s+надо\\s+ничего\\s+лишн', re.I)
+EXACT_HINT = ('Набор: владелец требует дословности. Порядок на этот ход: 1) выписать его просьбу по пунктам '
+              'его словами; 2) сделать ровно это и ничего сверх — ни оформления, ни значка, ни рамки, ни '
+              'колонки, ни подсказки, ни «заодно»; 3) против каждого пункта сказать, что сделано и чем '
+              'доказано; 4) лишнее, добавленное раньше, удалить в этом же ходе; 5) формулировка непонятна — '
+              'один короткий вопрос, а не догадка.\n')
+
+
 def choice_hint(prompt):
     # Подсказка перед ответом: владелец просит варианты или говорит «не то».
     not_it = bool(NOT_IT_RE.search(prompt))
@@ -1128,8 +1140,10 @@ def timing_notice(root):
 
 def turn_start(data):
     root = project_dir(data)
+    prompt_raw = str(data.get('prompt') or '')
     snap = {'ts': time.time(), 'head': None, 'status': {},
-            'prompt': re.sub(r'\s+', ' ', str(data.get('prompt') or '')).strip()[:140]}
+            'exact': bool(EXACT_RE.search(prompt_raw)),
+            'prompt': re.sub(r'\s+', ' ', prompt_raw).strip()[:140]}
     head = git(root, 'rev-parse', 'HEAD')
     if head is not None:
         snap['head'] = head.strip()
@@ -1144,6 +1158,8 @@ def turn_start(data):
     prompt = str(data.get('prompt') or '').strip()
     if prompt.startswith('/'):
         return
+    if snap['exact']:
+        sys.stdout.write(EXACT_HINT)
     hint = choice_hint(prompt)
     if hint:
         sys.stdout.write(hint)
@@ -1185,6 +1201,8 @@ def check_docs(data):
                     touched.add(f)
             except Exception:
                 pass
+    # Свой же лог хронометража не считается работой этого хода.
+    touched = {f for f in touched if not re.search(r'(^|/)docs/ai/timing(\.old)?\.csv$', f)}
     deleted = {f for f, (st, sig) in now.items() if 'D' in st}
     code, docs = [], False
     for f in sorted(touched):
@@ -1196,7 +1214,14 @@ def check_docs(data):
         ext = os.path.splitext(f)[1].lower()
         if ext in HEADER_EXT and not GENERATED.search(f):
             code.append(f)
-    doc_msgs = doc_problems(root, top, touched - deleted)
+    exact_msgs = []
+    if snap and snap.get('exact') and (touched - deleted):
+        exact_msgs.append('Владелец требовал сделать дословно. Прежде чем заканчивать: сверь по пунктам его '
+                          'словами, что просили и что сделано; всё, добавленное сверх просьбы (оформление, '
+                          'значок, рамка, пунктир, колонка, подсказка, блок, поле), удали сейчас; непонятное — '
+                          'один короткий вопрос. Сверил, лишнего нет — заканчивай ответ, владельцу про эту '
+                          'проверку не писать.')
+    doc_msgs = exact_msgs + doc_problems(root, top, touched - deleted)
     if not code:
         if doc_msgs:
             block(['Перед завершением: ' + ' '.join(doc_msgs)])

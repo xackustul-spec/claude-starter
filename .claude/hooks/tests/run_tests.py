@@ -193,6 +193,14 @@ def scenarios(impl, ps, tmp):
     if 'Как выдавать выбор' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'подсказка', 'без подсказки', out[-1][4], '')
     S('подсказка: команда со слэшем — молчит', 'turn-start', ask('/kit-audit покажи варианты'), r, 'allow')
+    S('точность: «повторяю в пятый раз»', 'turn-start', ask('повторяю в пятый раз: справа от легенды'), r,
+      'ctx', 'дословности')
+    S('точность: «я такого не говорил»', 'turn-start', ask('я такого не говорил про плитки'), r, 'ctx', 'ничего сверх')
+    S('точность: «отсебятина не нужна»', 'turn-start', ask('делать только то что прошу, отсебятина не нужна'), r,
+      'ctx', 'удалить в этом же ходе')
+    S('точность: обычная просьба — без напоминания', 'turn-start', ask('добавь колонку с датой оплаты'), r, 'ctx')
+    if 'дословности' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'напоминание', 'без напоминания', out[-1][4], '')
     S('ход: чужой файл не считается', 'check-docs', {'session_id': s, 'stop_hook_active': False}, r, 'allow')
     write(r, 'src/app.py', 'print(1)\n')
     S('ход: код без шапки и документов', 'check-docs', {'session_id': s}, r, 'block', 'src/app.py')
@@ -233,6 +241,20 @@ def scenarios(impl, ps, tmp):
     write(r, 'docs/ai/KNOWLEDGE.md', ''.join(f'- факт {i}\n' for i in range(80)))
     write(r, 'docs/ai/API_YANDEX.md', ''.join(f'- метод {i}\n' for i in range(301)))
     S('документы: тематический переполнен', 'check-docs', {'session_id': s5}, r, 'block', 'API_YANDEX.md (301')
+
+    # точность: владелец требовал дословности, а в ходе правились файлы
+    rx = new_project(tmp, f'{impl}-s8')
+    git(rx, 'init', '-q'); git(rx, 'add', '-A'); git(rx, 'commit', '-qm', 'init')
+    sx = f'{impl}-exact-{os.getpid()}'
+    S('точность: начало хода', 'turn-start',
+      {'session_id': sx, 'cwd': rx, 'prompt': 'повторяю в третий раз: только то, что прошу',
+       'scratchpad_dir': os.path.join(tmp, 'state')}, rx, 'ctx', 'дословности')
+    S('точность: файлов не трогали — можно заканчивать', 'check-docs', {'session_id': sx}, rx, 'allow')
+    write(rx, 'docs/ai/KNOWLEDGE.md', '- факт\n')
+    S('точность: файлы правились — сверка перед завершением', 'check-docs', {'session_id': sx}, rx, 'block',
+      'добавленное сверх просьбы')
+    S('точность: повторный Stop не зацикливается', 'check-docs',
+      {'session_id': sx, 'stop_hook_active': True}, rx, 'allow')
 
     # хронометраж: строка на каждый ответ
     r = new_project(tmp, f'{impl}-s7')
