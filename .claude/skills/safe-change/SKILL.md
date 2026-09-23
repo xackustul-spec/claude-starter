@@ -41,4 +41,4 @@ PROJECT_MAP / FOUNDATION / SPEC / DECISIONS / TOOLS / LESSONS · код и до�
 
 ## 7. Отчёт
 Изменено · проверено (итоги команд, скриншоты) · затронуто рядом · осталось ·
-«Заметил, не сделал». Поймал себя на оправдании → [stop-phrases.md](stop-phrases.md).
+замеченное рядом — строкой в STATE.md, «Заметил». Поймал себя на оправдании → [stop-phrases.md](stop-phrases.md).
