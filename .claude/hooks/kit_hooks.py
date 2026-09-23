@@ -1417,7 +1417,8 @@ def session_start(data):
 # Файлы набора (без документов проекта и сливаемых файлов) и их отпечатки — в .claude/starter.json.
 KIT_SKIP_TOP = {'.git', '.gitignore', 'docs', 'inbox', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json',
                 'VERSION', 'CHANGELOG.md'}
-KIT_SKIP_REL = {'.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json'}
+KIT_SKIP_REL = {'.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json',
+                '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock'}
 
 
 def file_hash(path):
@@ -1460,7 +1461,19 @@ def write_manifest(kit, source, root):
         p = os.path.join(root, rel)
         if os.path.isfile(p):
             files[rel] = file_hash(p)
-    data = {'version': read_version(kit), 'source': source, 'installed': time.strftime('%Y-%m-%d'), 'files': files}
+    version = read_version(kit)
+    if not version:
+        # Папка-источник без VERSION (например, указали сам проект) — не затирать записанную версию.
+        try:
+            version = str((json.load(open(manifest_path(root), encoding='utf-8-sig')) or {}).get('version') or '')
+        except Exception:
+            version = ''
+        if not version:
+            sys.stdout.write('Не записано: в папке набора нет файла VERSION, а в проекте нет записанной версии. '
+                             'Укажи путь к исходнику набора: manifest <папка набора> <адрес источника>.\n')
+            return
+        sys.stdout.write('В указанной папке нет VERSION — версия оставлена прежней: ' + version + '.\n')
+    data = {'version': version, 'source': source, 'installed': time.strftime('%Y-%m-%d'), 'files': files}
     with open(manifest_path(root), 'w', encoding='utf-8') as fh:
         json.dump(data, fh, ensure_ascii=False, indent=1, sort_keys=True)
     sys.stdout.write(f'Записано: .claude/starter.json — версия {data["version"]}, файлов набора: {len(files)}.\n')

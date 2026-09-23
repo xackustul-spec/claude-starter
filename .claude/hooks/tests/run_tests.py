@@ -397,6 +397,11 @@ def scenarios(impl, ps, tmp):
     newkit = os.path.join(tmp, f'{impl}-newkit')
     shutil.copytree(basekit, newkit, ignore=skip)
     S('версия: записать отпечатки', 'manifest', b'', r, 'ctx', 'версия', args=[basekit, newkit])
+    # личные настройки и метка обновления в список файлов набора не попадают
+    man = json.load(open(os.path.join(r, '.claude', 'starter.json'), encoding='utf-8'))
+    bad = [x for x in man.get('files', {}) if x.endswith('.claude/settings.local.json') or 'starter.lock' in x]
+    out.append(('версия: личные настройки не в манифесте', not bad, 'нет' if not bad else 'есть',
+                'нет', str(bad)[:80], ''))
     S('версия: та же версия — без уведомления', 'session-start', {'source': 'startup'}, r, 'ctx')
     if 'новая версия' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'уведомление', 'без уведомления', out[-1][4], '')
@@ -419,6 +424,18 @@ def scenarios(impl, ps, tmp):
       env={'KIT_NO_UPDATE_CHECK': ''})
 
     S('исходник набора распознаётся', 'session-start', {'source': 'startup'}, newkit, 'ctx', 'исходник набора')
+
+    # папка без VERSION не затирает записанную версию (последним: переписывает манифест)
+    noverkit = os.path.join(tmp, f'{impl}-noverkit')
+    shutil.copytree(basekit, noverkit, ignore=skip)
+    os.remove(os.path.join(noverkit, 'VERSION'))
+    verwas = json.load(open(os.path.join(r, '.claude', 'starter.json'), encoding='utf-8')).get('version')
+    S('версия: папка без VERSION — старая версия сохранена', 'manifest', b'', r, 'ctx',
+      'оставлена прежней', args=[noverkit, 'https://example.invalid'])
+    man2 = json.load(open(os.path.join(r, '.claude', 'starter.json'), encoding='utf-8'))
+    out.append(('версия: поле version не затёрто', man2.get('version') == verwas,
+                man2.get('version') or 'пусто', verwas, '', ''))
+
 
     # запуск из подпапки
     r = new_project(tmp, f'{impl}-s3')
@@ -470,10 +487,13 @@ def scenarios(impl, ps, tmp):
     S('личные настройки: осторожный режим — молча', 'pre-write',
       {'tool_name': 'Write', 'tool_input': {'file_path': r + '/.claude/settings.local.json',
        'content': '{"permissions": {"defaultMode": "default"}, "outputStyle": "Concise"}'}}, r, 'allow')
-    import json as _json
     write(r, '.claude/rules/upd.md', '---\npaths:\n  - "**/*.zzz"\n---\n# правило\n')
-    h = subprocess.run([sys.executable, os.path.join(HOOKS, 'kit_hooks.py'), 'manifest', r, 'src'],
-                       capture_output=True, cwd=r, env=dict(os.environ, CLAUDE_PROJECT_DIR=r))
+    # манифест пишем прямо, без CLI: здесь проверяется режим обновления, а не запись отпечатков
+    man_files = {rel: K.file_hash(os.path.join(r, rel))
+                 for rel in ('.claude/rules/upd.md', '.claude/rules/code.md')}
+    write(r, '.claude/starter.json', json.dumps(
+        {'version': '1.0.0', 'source': 'src', 'installed': '2026-01-01', 'files': man_files},
+        ensure_ascii=False, indent=1, sort_keys=True))
     write(r, '.claude/starter.lock', '{"mode": "update"}')
     S('обновление набора: свой файл — молча', 'pre-write',
       {'tool_name': 'Write', 'tool_input': {'file_path': r + '/.claude/rules/upd.md', 'content': '# новое'}}, r, 'allow')

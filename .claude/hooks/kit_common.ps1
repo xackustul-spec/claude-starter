@@ -1164,7 +1164,7 @@ function Clear-OldState($data) {
 # ------------------------------------------------------------- версия набора
 # Файлы набора (без документов проекта и сливаемых файлов) и их отпечатки — в .claude/starter.json.
 $script:KitSkipTop = @('.git', '.gitignore', 'docs', 'inbox', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json', 'VERSION', 'CHANGELOG.md')
-$script:KitSkipRel = @('.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json')
+$script:KitSkipRel = @('.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json', '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock')
 function Get-FileHash16([string]$path) {
     $raw = [System.IO.File]::ReadAllBytes($path)
     $buf = New-Object System.Collections.Generic.List[byte] ($raw.Length)
@@ -1216,7 +1216,18 @@ function Write-KitManifest([string]$kit, [string]$source, [string]$root) {
         $p = Join-Path $root $rel
         if ([System.IO.File]::Exists($p)) { $files[$rel] = Get-FileHash16 $p }
     }
-    $data = [ordered]@{ files = $files; installed = (Get-Date).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture); source = $source; version = (Read-KitVersion $kit) }
+    $version = Read-KitVersion $kit
+    if (-not $version) {
+        # Папка-источник без VERSION (например, указали сам проект) — не затирать записанную версию.
+        $man = Read-Manifest $root
+        if ($man) { $version = [string](Get-Prop $man 'version') }
+        if (-not $version) {
+            Write-Out 'Не записано: в папке набора нет файла VERSION, а в проекте нет записанной версии. Укажи путь к исходнику набора: manifest <папка набора> <адрес источника>.'
+            return
+        }
+        Write-Out ('В указанной папке нет VERSION — версия оставлена прежней: ' + $version + '.')
+    }
+    $data = [ordered]@{ files = $files; installed = (Get-Date).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture); source = $source; version = $version }
     [System.IO.File]::WriteAllText((Get-ManifestPath $root), ($data | ConvertTo-Json -Depth 5), $script:Utf8)
     Write-Out ('Записано: .claude/starter.json — версия ' + $data.version + ', файлов набора: ' + $files.Count + '.')
 }
