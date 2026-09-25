@@ -1146,32 +1146,86 @@ function Invoke-TurnStart($data) {
 # Лимиты строк: подключённые всегда документы — жёстче, остальные — 300.
 $script:DocLimits = @{ 'PROFILE.md' = 40; 'STATE.md' = 60; 'KNOWLEDGE.md' = 80; 'LESSONS.md' = 40; 'INDEX.md' = 60; 'PROJECT_MAP.md' = 40 }
 $script:DocLimitDefault = 300
+function Get-FamilyZero([string]$root, [string]$index, [string]$family) {
+    # Нулевой файл семейства — тот, что назван в строке INDEX про папку: «(оглавление — X)».
+    if (-not $index) { return @($null, 'нет строки') }
+    foreach ($line in ($index -split "`n")) {
+        if (-not $line.Contains('specs/' + $family + '/')) { continue }
+        $m = [regex]::Match($line, 'оглавлени[ея]\s*[—-]\s*`?([^`|)\s]+)')
+        if (-not $m.Success) { return @($null, 'без нулевого') }
+        $name = $m.Groups[1].Value.Trim()
+        foreach ($cand in @((Join-Path $root $name), (Join-Path (Join-Path (Join-Path $root 'docs') 'ai') $name))) {
+            if ([System.IO.File]::Exists($cand)) { return @($cand, 'ok') }
+        }
+        return @($null, ('нет файла ' + $name))
+    }
+    return @($null, 'нет строки')
+}
 function Get-DocProblems([string]$root, [string]$top, $touched) {
-    # Документы docs/ai, изменённые в этом ходе: не переполнены и записаны в INDEX.md.
+    # Документы docs/ai, изменённые в этом ходе: не переполнены, записаны в INDEX.md,
+    # а часть семейства — в его нулевом файле (нулевой — только маршрут, содержимое — в частях).
     $index = $null
     try { $ip = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'INDEX.md'; if ([System.IO.File]::Exists($ip)) { $index = [System.IO.File]::ReadAllText($ip, $script:Utf8) } } catch {}
-    $over = @(); $unreg = @()
+    $over = @(); $unreg = @(); $fam = @()
     foreach ($f in (Sort-Ordinal @($touched))) {
-        $m = [regex]::Match($f, '(^|/)docs/ai/([^/]+\.md)$')
-        if (-not $m.Success) { continue }
-        $name = $m.Groups[2].Value
+        $m = [regex]::Match($f, '(^|/)docs/ai/(?:(specs|solutions)/[^/]+/)?([^/]+\.md)$')
+        if (-not $m.Success -or ('/' + $f).Contains('/previews/')) { continue }
+        $kind = $m.Groups[2].Value; $name = $m.Groups[3].Value
         $full = Join-Path $top $f
         if (-not [System.IO.File]::Exists($full)) { continue }
         $txt = [System.IO.File]::ReadAllText($full, $script:Utf8)
         $n = ([regex]::Matches($txt, "`n")).Count
         if ($txt.Length -gt 0 -and -not $txt.EndsWith("`n")) { $n++ }
-        $limit = if ($script:DocLimits.ContainsKey($name)) { $script:DocLimits[$name] } else { $script:DocLimitDefault }
+        $limit = $script:DocLimitDefault
+        if (-not $kind -and $script:DocLimits.ContainsKey($name)) { $limit = $script:DocLimits[$name] }
         if ($n -gt $limit) { $over += ($name + ' (' + $n + ' строк, предел ' + $limit + ')') }
-        if ($null -ne $index -and -not $script:DocLimits.ContainsKey($name) -and -not $index.Contains($name)) { $unreg += $name }
+        if ($kind -eq 'specs') {
+            $family = [regex]::Match($f, '(^|/)docs/ai/specs/([^/]+)/').Groups[2].Value
+            $z = Get-FamilyZero $root $index $family
+            $zero = $z[0]; $why = $z[1]
+            if ($null -eq $zero) {
+                $reason = $why
+                if ($why -eq 'нет строки') { $reason = 'в INDEX.md нет строки про семейство' }
+                elseif ($why -eq 'без нулевого') { $reason = 'в строке INDEX не назван нулевой файл «(оглавление — X)»' }
+                $fam += ('specs/' + $family + '/ — ' + $reason)
+            } else {
+                $ztxt = ''
+                try { $ztxt = [System.IO.File]::ReadAllText($zero, $script:Utf8) } catch {}
+                if (-not $ztxt.Contains($name)) { $fam += ($name + ' не записана в нулевом файле ' + [System.IO.Path]::GetFileName($zero)) }
+            }
+        } elseif ((-not $kind) -and ($null -ne $index) -and (-not $script:DocLimits.ContainsKey($name)) -and (-not $index.Contains($name))) { $unreg += $name }
     }
     $msgs = @()
     if ($over.Count -gt 0) {
-        $msgs += ('Документ переполнен: ' + ($over -join ', ') + '. Раздели молча по «Рост документов» (скилл project-memory): отдельная тема — в свой docs/ai/<ТЕМА>.md; разросшаяся тема — исходный файл становится оглавлением, части уходят в docs/ai/specs/<тема>/ с колонкой «когда сюда идти»; из STATE/KNOWLEDGE/LESSONS — старое и крупные темы вынести. В docs/ai/INDEX.md — строка на семейство.')
+        $msgs += ('Документ переполнен: ' + ($over -join ', ') + '. Раздели молча по «Рост документов» (скилл project-memory): отдельная тема — в свой docs/ai/<ТЕМА>.md; разросшаяся тема — исходный файл становится нулевым (только маршрут), содержимое уходит в части docs/ai/specs/<тема>/, у каждой — строка «когда сюда идти»; переросшая часть — новая часть, не дописывать. В docs/ai/INDEX.md — строка на семейство с «(оглавление — X)».')
     }
     if ($unreg.Count -gt 0) {
         $msgs += ('Документ не записан в docs/ai/INDEX.md: ' + ($unreg -join ', ') + '. Добавь строку: файл · какие данные в нём · когда читать.')
     }
+    if ($fam.Count -gt 0) {
+        $msgs += ('Часть семейства без записи в нулевом файле: ' + ($fam -join '; ') + '. Нулевой файл — только маршрут: строка на каждую часть — что в ней и когда сюда идти, записывается сразу, тем же ходом.')
+    }
     return $msgs
+}
+function Get-OvergrownNotice([string]$root) {
+    # На старте: все документы docs/ai против пределов, а не только тронутые в ходе.
+    $base = Join-Path (Join-Path $root 'docs') 'ai'
+    if (-not (Test-Path -LiteralPath $base)) { return '' }
+    $over = @()
+    foreach ($fi in (Get-ChildItem -LiteralPath $base -Recurse -File -Filter *.md)) {
+        $rel = ($fi.FullName.Substring($base.Length).TrimStart('\', '/')) -replace '\\', '/'
+        if ($rel.StartsWith('previews/')) { continue }
+        $txt = ''
+        try { $txt = [System.IO.File]::ReadAllText($fi.FullName, $script:Utf8) } catch { continue }
+        $n = ([regex]::Matches($txt, "`n")).Count
+        if ($txt.Length -gt 0 -and -not $txt.EndsWith("`n")) { $n++ }
+        $limit = $script:DocLimitDefault
+        if (-not $rel.Contains('/') -and $script:DocLimits.ContainsKey($fi.Name)) { $limit = $script:DocLimits[$fi.Name] }
+        if ($n -gt $limit) { $over += ($rel + ' (' + $n + '/' + $limit + ')') }
+    }
+    if ($over.Count -eq 0) { return '' }
+    $tail = ''; if ($over.Count -gt 4) { $tail = ' и ещё ' + ($over.Count - 4) }
+    return ('Документы переросли предел: ' + (($over | Select-Object -First 4) -join ', ') + $tail + ' — разделить по «Рост документов» (project-memory), когда будет удобно остановиться.')
 }
 function Set-StateStamp([string]$root, [string]$top) {
     # Техническая часть STATE.md (дата и коммит) — хуком, без участия Claude.
@@ -1294,7 +1348,7 @@ function Clear-OldState($data) {
 }
 # ------------------------------------------------------------- версия набора
 # Файлы набора (без документов проекта и сливаемых файлов) и их отпечатки — в .claude/starter.json.
-$script:KitSkipTop = @('.git', '.gitignore', 'docs', 'inbox', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json', 'VERSION', 'CHANGELOG.md')
+$script:KitSkipTop = @('.git', '.gitignore', 'docs', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json', 'VERSION', 'CHANGELOG.md')
 $script:KitSkipRel = @('.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json', '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock', '.claude/session.lock')
 function Get-FileHash16([string]$path) {
     $raw = [System.IO.File]::ReadAllBytes($path)
@@ -1540,6 +1594,8 @@ function Invoke-SessionStart($data) {
     $note = Get-TimingNotice $root
     if ($note) { $lines += $note }
     $note = Get-LessonsNotice $root
+    if ($note) { $lines += $note }
+    $note = Get-OvergrownNotice $root
     if ($note) { $lines += $note }
     $note = Get-InterfaceNotice $root
     if ($note) { $lines += $note }

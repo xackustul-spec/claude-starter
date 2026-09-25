@@ -181,6 +181,32 @@ def scenarios(impl, ps, tmp):
         out[-1] = (out[-1][0], False, 'ложная тревога', 'без строки про уроки', out[-1][4], '')
     write(r, 'docs/ai/PROFILE.md', '## Паспорт проекта\n- Интерфейс: да\n## Профиль работы\n- Доверие: обычное — подтверждено владельцем: да\n')
     S('старт: проект с интерфейсом — напомнить про браузер', 'session-start', {'source': 'startup'}, r, 'ctx', 'через браузер')
+    write(r, 'docs/ai/BIG.md', '# Большой\n' + 'строка\n' * 320)
+    write(r, 'docs/ai/INDEX.md', '## Указатель\n| Файл | Данные | Когда |\n|---|---|---|\n| BIG.md | большой | всегда |\n')
+    S('старт: нетронутый документ перерос — сказать', 'session-start', {'source': 'startup'}, r, 'ctx', 'переросли предел')
+    os.remove(os.path.join(r, 'docs/ai/BIG.md'))
+
+    # ---- семейство: нулевой файл и части
+    r = new_project(tmp, f'{impl}-s11')
+    git(r, 'init', '-q'); git(r, 'add', '-A'); git(r, 'commit', '-qm', 'init')
+    write(r, 'docs/ai/INDEX.md', '## Указатель\n| Файл | Данные | Когда |\n|---|---|---|\n'
+          '| specs/checkup/ | проверки по частям | при вопросе по группе (оглавление — `ТЗ-ЧЕКЛИСТ.md`) |\n'
+          '| specs/orphan/ | без нулевого | когда-нибудь |\n')
+    write(r, 'ТЗ-ЧЕКЛИСТ.md', '# Чеклист\n| Часть | О чём | Когда сюда идти |\n|---|---|---|\n| 01-indexing.md | индексация | когда про индекс |\n')
+    git(r, 'add', '-A'); git(r, 'commit', '-qm', 'family')
+    s11 = S('семейство: снимок', 'turn-start', {'prompt': 'добавь часть про скорость'}, r, 'ctx')
+    write(r, 'docs/ai/specs/checkup/02-speed.md', '# Скорость\n- проверка\n')
+    S('семейство: новая часть не записана в нулевом — блок', 'check-docs', {'session_id': s11}, r, 'block', 'нулевом файле')
+    write(r, 'ТЗ-ЧЕКЛИСТ.md', '# Чеклист\n| Часть | О чём | Когда сюда идти |\n|---|---|---|\n| 01-indexing.md | индексация | когда про индекс |\n| 02-speed.md | скорость | когда про скорость |\n')
+    S('семейство: часть записана — можно', 'check-docs', {'session_id': s11}, r, 'allow')
+    write(r, 'docs/ai/specs/orphan/01-x.md', '# X\n')
+    S('семейство: в INDEX нет нулевого — блок', 'check-docs', {'session_id': s11}, r, 'block', 'не назван нулевой файл')
+    os.remove(os.path.join(r, 'docs/ai/specs/orphan/01-x.md'))
+    write(r, 'docs/ai/specs/nowhere/01-y.md', '# Y\n')
+    S('семейство: нет строки в INDEX — блок', 'check-docs', {'session_id': s11}, r, 'block', 'нет строки про семейство')
+    os.remove(os.path.join(r, 'docs/ai/specs/nowhere/01-y.md'))
+    write(r, 'docs/ai/specs/checkup/02-speed.md', '# Скорость\n' + 'строка\n' * 310)
+    S('семейство: часть переросла 300 — блок', 'check-docs', {'session_id': s11}, r, 'block', 'предел 300')
 
     # ход: turn-start → check-docs
     r = new_project(tmp, f'{impl}-s2')

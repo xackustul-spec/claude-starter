@@ -1414,38 +1414,100 @@ DOC_LIMITS = {'PROFILE.md': 40, 'STATE.md': 60, 'KNOWLEDGE.md': 80, 'LESSONS.md'
 DOC_LIMIT_DEFAULT = 300
 
 
+FAMILY_RE = re.compile(r'(^|/)docs/ai/specs/([^/]+)/([^/]+\.md)$')
+PART_RE = re.compile(r'(^|/)docs/ai/(?:(specs|solutions)/[^/]+/)?([^/]+\.md)$')
+
+
+def family_zero(root, index, family):
+    # Нулевой файл семейства — тот, что назван в строке INDEX про папку: «(оглавление — X)».
+    if not index:
+        return None, 'нет строки'
+    for line in index.splitlines():
+        if ('specs/' + family + '/') not in line:
+            continue
+        m = re.search(r'оглавлени[ея]\s*[—-]\s*`?([^`|)\s]+)', line)
+        if not m:
+            return None, 'без нулевого'
+        name = m.group(1).strip()
+        for cand in (os.path.join(root, name), os.path.join(root, 'docs', 'ai', name)):
+            if os.path.isfile(cand):
+                return cand, 'ok'
+        return None, 'нет файла ' + name
+    return None, 'нет строки'
+
+
 def doc_problems(root, top, touched):
-    # Документы docs/ai, изменённые в этом ходе: не переполнены и записаны в INDEX.md.
+    # Документы docs/ai, изменённые в этом ходе: не переполнены, записаны в INDEX.md,
+    # а часть семейства — в его нулевом файле (нулевой — только маршрут, содержимое — в частях).
     try:
         index = open(os.path.join(root, 'docs', 'ai', 'INDEX.md'), encoding='utf-8-sig').read()
     except Exception:
         index = None
-    over, unreg = [], []
+    over, unreg, fam = [], [], []
     for f in sorted(touched):
-        m = re.search(r'(^|/)docs/ai/([^/]+\.md)$', f)
-        if not m:
+        m = PART_RE.search(f)
+        if not m or '/previews/' in ('/' + f):
             continue
-        name = m.group(2)
+        kind, name = m.group(2), m.group(3)
         try:
             txt = open(os.path.join(top, f), encoding='utf-8-sig', errors='replace').read()
             n = txt.count('\n') + (0 if (not txt or txt.endswith('\n')) else 1)
         except Exception:
             continue
-        limit = DOC_LIMITS.get(name, DOC_LIMIT_DEFAULT)
+        limit = DOC_LIMITS.get(name, DOC_LIMIT_DEFAULT) if not kind else DOC_LIMIT_DEFAULT
         if n > limit:
             over.append(f'{name} ({n} строк, предел {limit})')
-        if index is not None and name not in DOC_LIMITS and name not in index:
+        if kind == 'specs':
+            family = FAMILY_RE.search(f).group(2)
+            zero, why = family_zero(root, index, family)
+            if zero is None:
+                fam.append(f'specs/{family}/ — {"в INDEX.md нет строки про семейство" if why == "нет строки" else ("в строке INDEX не назван нулевой файл «(оглавление — X)»" if why == "без нулевого" else why)}')
+            else:
+                try:
+                    ztxt = open(zero, encoding='utf-8-sig', errors='replace').read()
+                except Exception:
+                    ztxt = ''
+                if name not in ztxt:
+                    fam.append(f'{name} не записана в нулевом файле {os.path.basename(zero)}')
+        elif not kind and index is not None and name not in DOC_LIMITS and name not in index:
             unreg.append(name)
     msgs = []
     if over:
         msgs.append('Документ переполнен: ' + ', '.join(over) + '. Раздели молча по «Рост документов» (скилл project-memory): '
-                    'отдельная тема — в свой docs/ai/<ТЕМА>.md; разросшаяся тема — исходный файл становится оглавлением, '
-                    'части уходят в docs/ai/specs/<тема>/ с колонкой «когда сюда идти»; из STATE/KNOWLEDGE/LESSONS — '
-                    'старое и крупные темы вынести. В docs/ai/INDEX.md — строка на семейство.')
+                    'отдельная тема — в свой docs/ai/<ТЕМА>.md; разросшаяся тема — исходный файл становится нулевым '
+                    '(только маршрут), содержимое уходит в части docs/ai/specs/<тема>/, у каждой — строка «когда сюда идти»; '
+                    'переросшая часть — новая часть, не дописывать. В docs/ai/INDEX.md — строка на семейство с «(оглавление — X)».')
     if unreg:
         msgs.append('Документ не записан в docs/ai/INDEX.md: ' + ', '.join(unreg) + '. Добавь строку: файл · какие '
                     'данные в нём · когда читать.')
+    if fam:
+        msgs.append('Часть семейства без записи в нулевом файле: ' + '; '.join(fam) + '. Нулевой файл — только маршрут: '
+                    'строка на каждую часть — что в ней и когда сюда идти, записывается сразу, тем же ходом.')
     return msgs
+
+
+def overgrown_notice(root):
+    # На старте: все документы docs/ai против пределов, а не только тронутые в ходе.
+    base = os.path.join(root, 'docs', 'ai')
+    over = []
+    for d, dirs, files in os.walk(base):
+        dirs[:] = [x for x in dirs if x != 'previews']
+        for fn in files:
+            if not fn.endswith('.md'):
+                continue
+            rel = os.path.relpath(os.path.join(d, fn), base).replace('\\', '/')
+            try:
+                txt = open(os.path.join(d, fn), encoding='utf-8-sig', errors='replace').read()
+                n = txt.count('\n') + (0 if (not txt or txt.endswith('\n')) else 1)
+            except Exception:
+                continue
+            limit = DOC_LIMITS.get(fn, DOC_LIMIT_DEFAULT) if '/' not in rel else DOC_LIMIT_DEFAULT
+            if n > limit:
+                over.append(f'{rel} ({n}/{limit})')
+    if not over:
+        return ''
+    return ('Документы переросли предел: ' + ', '.join(over[:4]) + (f' и ещё {len(over) - 4}' if len(over) > 4 else '') +
+            ' — разделить по «Рост документов» (project-memory), когда будет удобно остановиться.')
 
 
 STAMP_RE = re.compile(r'(обновлено:\s*)([^)\n]*?)(,\s*head:\s*)([^)\n]*)(\))')
@@ -1571,6 +1633,9 @@ def session_start(data):
     note = lessons_notice(root)
     if note:
         lines.append(note)
+    note = overgrown_notice(root)
+    if note:
+        lines.append(note)
     note = interface_notice(root)
     if note:
         lines.append(note)
@@ -1622,7 +1687,7 @@ def interface_notice(root):
 
 # ------------------------------------------------------------- версия набора
 # Файлы набора (без документов проекта и сливаемых файлов) и их отпечатки — в .claude/starter.json.
-KIT_SKIP_TOP = {'.git', '.gitignore', 'docs', 'inbox', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json',
+KIT_SKIP_TOP = {'.git', '.gitignore', 'docs', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json',
                 'VERSION', 'CHANGELOG.md'}
 KIT_SKIP_REL = {'.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json',
                 '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock', '.claude/session.lock'}
