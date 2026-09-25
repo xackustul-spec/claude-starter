@@ -165,6 +165,14 @@ function Invoke-GuardShell($data) {
             )
         }
     }
+    $root = Get-ProjectDir $data
+    if ((Test-UpdateMode $root) -and [regex]::IsMatch($cmd, 'docs[\\/]ai[\\/]', 'IgnoreCase') -and ($cmd -match $script:WriteVerbRe)) {
+        Out-Block @('Идёт обновление набора (есть .claude/starter.lock), а команда пишет в docs/ai. docs/ai — записи владельца, их не трогают ни инструментом, ни командой. Закончи обновление, убери starter.lock, и только потом правь документы.')
+    }
+    $outs = @(Get-ShellOutsidePaths $cmd $root)
+    if ($outs.Count -gt 0) {
+        Out-Ask ('В команде путь вне папки проекта: ' + (($outs | Select-Object -First 3) -join ', ') + '. Папка этого проекта — ' + $root + '. Каждый проект работает только в своей папке: возьмите то же самое изнутри проекта, а если нужного здесь нет — скажите владельцу, что понадобилось снаружи и зачем, и получите «да».')
+    }
     $tgt = Get-ShellWriteTarget $cmd
     if ($tgt) {
         Out-Ask ('Запись файла кода через оболочку: ' + $tgt + '. Так обходятся проверки набора — кириллица в именах, правила для этого типа файла, синтаксис. Пиши файлы инструментом Write или Edit; если нужно именно командой (генерация, сборка), скажи владельцу зачем и получи «да».')
@@ -534,6 +542,11 @@ function Get-OutsideProject([string]$path, [string]$root) {
     # Полный путь, если файл лежит вне папки проекта; иначе $null. Временные каталоги не считаются.
     if ([string]::IsNullOrWhiteSpace($path)) { return $null }
     if ($path -match '^[a-zA-Z][a-zA-Z0-9+.-]*://') { return $null }
+    # «~» — домашняя папка, как os.path.expanduser в Python.
+    if ($path -eq '~' -or $path.StartsWith('~/') -or $path.StartsWith('~\\')) {
+        $home0 = [string]$env:HOME; if (-not $home0) { $home0 = [string]$env:USERPROFILE }
+        if ($home0) { $path = $home0 + $path.Substring(1) }
+    }
     $full = $null
     try { $full = [System.IO.Path]::GetFullPath($path) } catch { return $null }
     if ($null -ne (Get-RelPath $full $root)) { return $null }
@@ -546,11 +559,32 @@ function Get-OutsideProject([string]$path, [string]$root) {
     }
     return $full
 }
+$script:WinPathRe = '(?<![\w])([A-Za-z]:[\\/][^\s"''<>|;&)]+)'
+$script:UnixPathRe = '(?<![\w/.\-])((?:/(?:home|srv|mnt|media|data|Users|root)|~)/[^\s"''<>|;&)]+)'
+$script:SysPathRe = '[\\/](Windows|Program Files( \(x86\))?|ProgramData)[\\/]|[\\/]AppData[\\/]'
+function Get-ShellOutsidePaths([string]$cmd, [string]$root) {
+    # Абсолютные пути в команде, которые ведут за пределы папки проекта (системные папки не считаются).
+    $out = @()
+    foreach ($rx in @($script:WinPathRe, $script:UnixPathRe)) {
+        foreach ($m in [regex]::Matches($cmd, $rx)) {
+            $p = $m.Groups[1].Value.TrimEnd('.', ',', ':')
+            if ([regex]::IsMatch($p, $script:SysPathRe, 'IgnoreCase')) { continue }
+            $full = Get-OutsideProject $p $root
+            if ($full -and ($out -notcontains $full)) { $out += $full }
+        }
+    }
+    return $out
+}
+function Invoke-PreRead($data) {
+    # Один процесс на Read/Glob/Grep/NotebookEdit: чужая папка — вопрос владельцу.
+    Invoke-GuardOutside $data
+}
 function Invoke-GuardOutside($data) {
     # Каждый проект работает в своей папке: файл снаружи — вопрос владельцу, даже при полном доверии.
     $ti = Get-Prop $data 'tool_input'
     $path = [string](Get-Prop $ti 'file_path')
     if (-not $path) { $path = [string](Get-Prop $ti 'path') }
+    if (-not $path) { $path = [string](Get-Prop $ti 'notebook_path') }
     $root = Get-ProjectDir $data
     $full = Get-OutsideProject $path $root
     if ($null -eq $full) { return }
@@ -974,30 +1008,41 @@ function Write-Timing($data, [string]$root) {
         }
         $cut = Get-TimingSameTurn $path (@($row -split ';')[0])
         if ($null -ne $cut) {
-            $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+            $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
             try { $fs.SetLength([long]$cut) } finally { $fs.Dispose() }
         }
         $bytes = $script:Utf8.GetBytes($row + "`n")
-        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
         try { $fs.Write($bytes, 0, $bytes.Length) } finally { $fs.Dispose() }
     } catch {}
 }
 $script:CtxLimit = 200000
-function Get-ContextHint([string]$root) {
-    # Контекст на один запрос по последней записи лога; раздут — предложить закрыть тему.
-    # @() обязательно: одна строка возвращается как строка, и $rows[0] дал бы первый символ.
-    $rows = @(Get-TimingTail (Get-TimingPath $root) 1)
-    if ($rows.Count -eq 0) { return '' }
-    $p = @($rows[0] -split ';')
-    if ($p.Count -lt 11) { return '' }
-    $req = 0; $ctx = 0
+function Get-ContextPerRequest([string]$row) {
+    $p = @($row -split ';')
+    if ($p.Count -lt 11) { return $null }
     try {
         $req = [int]$p[5]
-        if ($req -lt 1) { return '' }
-        $ctx = ([double]([int]$p[6] + [int]$p[7] + [int]$p[8])) / $req
-    } catch { return '' }
-    if ($req -lt 2 -or $ctx -lt $script:CtxLimit) { return '' }
-    return ('Набор: контекст раздут — около ' + [int]($ctx / 1000) + ' тыс. токенов на каждый запрос в прошлом ходе. Дойдя до места, где можно остановиться (правка доведена, проверка показана), закрой тему скиллом kit-handover: дописать в документы всё, чего в них ещё нет, задать висящие вопросы владельцу сейчас, обновить «Сейчас» и «Следующий шаг», дать фразу для продолжения и предложить владельцу ввести /clear. Посреди начатой правки или незаданного вопроса не обрывать.')
+        if ($req -lt 2) { return $null }
+        return ([double]([int]$p[6] + [int]$p[7] + [int]$p[8])) / $req
+    } catch { return $null }
+}
+function Get-ContextHint([string]$root) {
+    # Контекст на один запрос по логу. Раздут — сказать один раз при переходе порога и потом каждый
+    # пятый ход, а не каждый: иначе напоминание становится обоями (ERP: 41 ход из 42 над порогом).
+    # @() обязательно: одна строка возвращается как строка, и $rows[0] дал бы первый символ.
+    $rows = @(Get-TimingTail (Get-TimingPath $root) 12)
+    if ($rows.Count -eq 0) { return '' }
+    $ctx = Get-ContextPerRequest $rows[$rows.Count - 1]
+    if ($null -eq $ctx -or $ctx -lt $script:CtxLimit) { return '' }
+    $streak = 0
+    for ($i = $rows.Count - 1; $i -ge 0; $i--) {
+        $c = Get-ContextPerRequest $rows[$i]
+        if ($null -eq $c -or $c -lt $script:CtxLimit) { break }
+        $streak++
+    }
+    if ($streak -ne 1 -and ($streak % 5) -ne 0) { return '' }
+    $k = [int][math]::Floor($ctx / 1000)
+    return ('Набор: контекст около ' + $k + ' тыс. токенов на каждый запрос — каждый ход дорожает и замедляется. Довести текущую правку до места, где можно остановиться, затем закрыть тему по kit-handover (дописать в документы всё, чего в них нет, задать висящие вопросы, обновить «Сейчас» и «Следующий шаг») и в конце ответа сказать владельцу отдельной строкой: «Контекст ~' + $k + ' тыс. на запрос — введите /clear, всё нужное записано». Посреди начатой правки или незаданного вопроса не обрывать.')
 }
 function Get-TimingNotice([string]$root) {
     # Одна строка при старте сеанса: куда уходит время и стоит ли разбираться.
@@ -1024,14 +1069,59 @@ function Get-TimingNotice([string]$root) {
     if ($outside -gt 0) { $tail += ' В ' + $outside + ' ходах трогали файлы вне папки проекта — так нельзя, работать только в ' + $root + '.' }
     return ('Хронометраж: последние ' + $tot.Count + ' ответов — в среднем ' + $avg.ToString('0', $script:Inv) + ' с, из них в инструментах ' + $avgT.ToString('0', $script:Inv) + ' с (' + $share + '%), токенов на ход около ' + $avgK.ToString('0', $script:Inv) + ' тыс.' + $tail)
 }
+# ------------------------------------------- секрет, вставленный владельцем в чат
+$script:PastedSecretRe = 'sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:\b(?:setx|export|set)\s+\w*(?:KEY|TOKEN|SECRET|PASS)\w*[=\s]+["'']?)([^\s"'']{8,})|(?:\b(?:api[_-]?key|token|secret|password|passwd|пароль)\s*[:=]\s*["'']?)([A-Za-z0-9!@#$%^&*()_+=\-\[\]{}.,;/\\|~]{8,})'
+$script:SecretHint = 'Набор: в сообщении владельца похоже на секрет (ключ, токен или пароль). Первой строкой ответа сказать, что он засветился в переписке и его нужно сменить, и куда вводить новый (переменная среды или .env, не чат). В файлы, документы и команды этот секрет не записывать.'
+function Hide-Secrets([string]$text) {
+    # Значение секрета в логе заменяется меткой; имя переменной и команда остаются.
+    $ev = [System.Text.RegularExpressions.MatchEvaluator]{
+        param($m)
+        $whole = $m.Value
+        foreach ($g in 1, 2) {
+            $v = $m.Groups[$g].Value
+            if ($v) { return ($whole.Substring(0, $whole.Length - $v.Length) + '<секрет>') }
+        }
+        return '<секрет>'
+    }
+    return [regex]::Replace($text, $script:PastedSecretRe, $ev, 'IgnoreCase')
+}
+# ------------------------------------------- второй сеанс Claude в той же папке
+$script:SessionLockMin = 10
+function Get-SessionLockPath([string]$root) { return (Join-Path (Join-Path $root '.claude') 'session.lock') }
+function Set-SessionClaim($data, [string]$root) {
+    # Записать себя как текущий сеанс папки; вернуть предупреждение, если тут только что работал другой.
+    $lock = Get-SessionLockPath $root
+    $sid = [string](Get-Prop $data 'session_id')
+    $notice = ''
+    try {
+        if ([System.IO.File]::Exists($lock)) {
+            $j = ([System.IO.File]::ReadAllText($lock, $script:Utf8)) | ConvertFrom-Json
+            $ts = [double](Get-Prop $j 'ts')
+            $age = [double]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) - $ts
+            $osid = [string](Get-Prop $j 'sid')
+            if ($sid -and $osid -and ($osid -ne $sid) -and ($age -ge 0) -and ($age -lt ($script:SessionLockMin * 60))) {
+                $notice = ('Набор: в этой папке работает ещё один сеанс Claude (его последний ход — ' + [int][math]::Floor($age / 60) + ' мин назад). Два сеанса в одной папке затирают правки друг друга и делают одну работу дважды. Первой строкой предупредить владельца и до его ответа ничего не править — только читать и отвечать.')
+            }
+        }
+    } catch {}
+    try {
+        $dir = Split-Path -Parent $lock
+        if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+        $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        [System.IO.File]::WriteAllText($lock, ('{"sid": ' + (ConvertTo-Json $sid) + ', "ts": ' + $now + '}'), $script:Utf8)
+    } catch {}
+    return $notice
+}
 function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data
     $ts = 0
     try { $ts = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } catch {}
     $promptRaw = [string](Get-Prop $data 'prompt')
     $prompt0 = [regex]::Replace($promptRaw.Trim(), '\s+', ' ')
-    $isExact = [bool](Test-Re $promptRaw $script:ExactRe)
-    $snap = @{ ts = $ts; head = $null; status = @{}; exact = $isExact; prompt = (Get-Cut $prompt0 140) }
+    $hasSecret = [regex]::IsMatch($promptRaw, $script:PastedSecretRe, 'IgnoreCase')
+    # Регистр не важен: «Дословно», «Не просил» с заглавной — те же слова (в Python re.I).
+    $isExact = [regex]::IsMatch($promptRaw, $script:ExactRe, 'IgnoreCase')
+    $snap = @{ ts = $ts; head = $null; status = @{}; exact = $isExact; prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -1040,18 +1130,21 @@ function Invoke-TurnStart($data) {
         if ($st) { foreach ($k in $st.Keys) { $snap.status[$k] = $st[$k][1] } }
     }
     try { ($snap | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'turn') -Encoding UTF8 } catch {}
+    $other = Set-SessionClaim $data $root
     $prompt = ([string](Get-Prop $data 'prompt')).Trim()
     if ($prompt.StartsWith('/')) { return }
+    if ($other) { Write-Out $other }
+    if ($hasSecret) { Write-Out $script:SecretHint }
     if ($isExact) { Write-Out $script:ExactHint }
     $ctxHint = Get-ContextHint $root
     if ($ctxHint) { Write-Out $ctxHint }
     $hint = Get-ChoiceHint $prompt
     if ($hint) { foreach ($line in $hint) { Write-Out $line } }
     if ($prompt.Length -lt 12) { return }
-    Write-Out 'Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог». Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.'
+    Write-Out 'Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог» (если владелец не задал форму ответа). Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.'
 }
 # Лимиты строк: подключённые всегда документы — жёстче, остальные — 300.
-$script:DocLimits = @{ 'PROFILE.md' = 40; 'STATE.md' = 60; 'KNOWLEDGE.md' = 80; 'LESSONS.md' = 40; 'INDEX.md' = 60 }
+$script:DocLimits = @{ 'PROFILE.md' = 40; 'STATE.md' = 60; 'KNOWLEDGE.md' = 80; 'LESSONS.md' = 40; 'INDEX.md' = 60; 'PROJECT_MAP.md' = 40 }
 $script:DocLimitDefault = 300
 function Get-DocProblems([string]$root, [string]$top, $touched) {
     # Документы docs/ai, изменённые в этом ходе: не переполнены и записаны в INDEX.md.
@@ -1088,11 +1181,13 @@ function Set-StateStamp([string]$root, [string]$top) {
         $raw = [System.IO.File]::ReadAllBytes($p)
         $bom = ($raw.Length -ge 3 -and $raw[0] -eq 0xEF -and $raw[1] -eq 0xBB -and $raw[2] -eq 0xBF)
         $txt = $script:Utf8.GetString($raw).TrimStart([char]0xFEFF)
-        $m = [regex]::Match($txt, '(обновлено:\s*)([^,)\n]*)(,\s*head:\s*)([^)\n]*)(\))')
+        $m = [regex]::Match($txt, '(обновлено:\s*)([^)\n]*?)(,\s*head:\s*)([^)\n]*)(\))')
         if (-not $m.Success -or $m.Value.Contains('TODO')) { return }
         $head = ([string](Invoke-Git $top @('rev-parse', '--short', 'HEAD'))).Trim()
-        if (-not $head) { $head = $m.Groups[4].Value }
-        $new = $m.Groups[1].Value + (Get-Date).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) + $m.Groups[3].Value + $head + $m.Groups[5].Value
+        # Владелец записал не просто sha («2c51ac9 в /srv/panel») — его head не трогаем, обновляем только дату.
+        $keep = $m.Groups[4].Value
+        if ($head -and [regex]::IsMatch($m.Groups[4].Value, '^\s*[0-9a-fA-F]{6,40}\s*$')) { $keep = $head }
+        $new = $m.Groups[1].Value + (Get-Date).ToString('yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture) + $m.Groups[3].Value + $keep + $m.Groups[5].Value
         if ($new -eq $m.Value) { return }
         $txt = $txt.Substring(0, $m.Index) + $new + $txt.Substring($m.Index + $m.Length)
         $bytes = $script:Utf8.GetBytes($txt)
@@ -1103,7 +1198,6 @@ function Set-StateStamp([string]$root, [string]$top) {
 function Invoke-CheckDocs($data) {
     $root = Get-ProjectDir $data
     Write-Timing $data $root
-    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) { return }
     $head = $head.Trim()
@@ -1130,7 +1224,10 @@ function Invoke-CheckDocs($data) {
         }
     }
     # Свой же лог хронометража не считается работой этого хода.
-    foreach ($f in @($touched)) { if ($f -match '(^|/)docs/ai/timing(\.old)?\.csv$') { [void]$touched.Remove($f) } }
+    foreach ($f in @($touched)) { if ($f -match '(^|/)docs/ai/timing(\.old)?\.csv$|(^|/)\.claude/session\.lock$') { [void]$touched.Remove($f) } }
+    # Штамп — до любой блокировки и при повторном проходе тоже (см. kit_hooks.py).
+    if ($touched.Count -gt 0) { Set-StateStamp $root $top }
+    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return }
     $code = @(); $docs = $false
     foreach ($f in (Sort-Ordinal @($touched))) {
         if ($now.ContainsKey($f) -and $now[$f][0].Contains('D')) { continue }
@@ -1146,7 +1243,6 @@ function Invoke-CheckDocs($data) {
     $docMsgs = @($exactMsgs) + @(Get-DocProblems $root $top $alive)
     if ($code.Count -eq 0) {
         if ($docMsgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($docMsgs -join ' ')) }
-        if ($touched.Count -gt 0) { Set-StateStamp $root $top }
         return
     }
     $noHeader = @()
@@ -1164,7 +1260,6 @@ function Invoke-CheckDocs($data) {
         $msgs += ("Нет строки 'Назначение:' в начале файлов: " + (($noHeader | Select-Object -First 10) -join ', ') + '. Добавь шапку (правило .claude/rules/code-headers.md).')
     }
     if ($msgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($msgs -join ' ')) }
-    Set-StateStamp $root $top
 }
 
 # ------------------------------------------------------------- session-start
@@ -1200,7 +1295,7 @@ function Clear-OldState($data) {
 # ------------------------------------------------------------- версия набора
 # Файлы набора (без документов проекта и сливаемых файлов) и их отпечатки — в .claude/starter.json.
 $script:KitSkipTop = @('.git', '.gitignore', 'docs', 'inbox', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json', 'VERSION', 'CHANGELOG.md')
-$script:KitSkipRel = @('.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json', '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock')
+$script:KitSkipRel = @('.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json', '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock', '.claude/session.lock')
 function Get-FileHash16([string]$path) {
     $raw = [System.IO.File]::ReadAllBytes($path)
     $buf = New-Object System.Collections.Generic.List[byte] ($raw.Length)
@@ -1368,12 +1463,42 @@ function Invoke-Scan([string[]]$paths) {
     }
     Write-Out ('Проверено файлов: ' + $total + ', с замечаниями: ' + $bad + '.')
 }
+# ------------------------------------------- уроки, которые повторяются, а проверки нет
+function Get-LessonsNotice([string]$root) {
+    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'LESSONS.md'
+    if (-not [System.IO.File]::Exists($p)) { return '' }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8).TrimStart([char]0xFEFF) } catch { return '' }
+    $stuck = @()
+    foreach ($line in ($txt -split "`n")) {
+        if (-not $line.StartsWith('|')) { continue }
+        $cells = @(($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() })
+        if ($cells.Count -lt 5 -or $cells[0].StartsWith('---') -or $cells[0].ToLowerInvariant().StartsWith('дата')) { continue }
+        $status = $cells[3].ToLowerInvariant()
+        $m = [regex]::Match($cells[4], '\d+')
+        $reps = 0; if ($m.Success) { $reps = [int]$m.Value }
+        if ($reps -lt 2 -or $status.Contains('закрыт')) { continue }
+        if ([regex]::IsMatch($line, 'хук|тест|линтер|rules/|\.md\b|правил', 'IgnoreCase')) { continue }
+        $stuck += (Get-Cut $cells[1] 60)
+    }
+    if ($stuck.Count -eq 0) { return '' }
+    return ('Уроки: ' + $stuck.Count + ' повторились 2 раза и больше, а проверки (хук, тест, правило) для них нет — «' + (($stuck | Select-Object -First 2) -join '»; «') + '». Предложить владельцу закрепить проверкой (project-memory, «уроки»).')
+}
+function Get-InterfaceNotice([string]$root) {
+    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'PROFILE.md'
+    if (-not [System.IO.File]::Exists($p)) { return '' }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8) } catch { return '' }
+    if (-not [regex]::IsMatch($txt, 'интерфейс\s*:\s*(да|есть)', 'IgnoreCase')) { return '' }
+    return 'Проект с интерфейсом: вид проверяется только через браузер (снимок экрана), не чтением вёрстки. Браузерных инструментов в сеансе нет — предложить владельцу подключить их первой строкой.'
+}
 function Invoke-SessionStart($data) {
     $root = Get-ProjectDir $data
     $src = [string](Get-Prop $data 'source')
     $lines = @('[claude-starter] Старт сеанса' + $(if ($src) { ' (' + $src + ')' } else { '' }) + '.')
     $statePath = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
     Clear-OldState $data
+    [void](Set-SessionClaim $data $root)
     if ([System.IO.File]::Exists((Join-Path $root 'INSTALL.md')) -and [System.IO.File]::Exists((Join-Path $root 'VERSION'))) {
         $lines += ('Это исходник набора claude-starter (версия ' + (Read-KitVersion $root) + '), не проект: не устанавливать и не заполнять docs/ai. Работа здесь — /kit-harvest (уроки из проектов), выпуск версий.')
     }
@@ -1413,6 +1538,10 @@ function Invoke-SessionStart($data) {
     $note = Get-UpdateNotice $root
     if ($note) { $lines += $note }
     $note = Get-TimingNotice $root
+    if ($note) { $lines += $note }
+    $note = Get-LessonsNotice $root
+    if ($note) { $lines += $note }
+    $note = Get-InterfaceNotice $root
     if ($note) { $lines += $note }
     $lines += 'Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.'
     Write-Out ($lines -join "`n")

@@ -169,6 +169,18 @@ def scenarios(impl, ps, tmp):
         out[-1] = (out[-1][0], False, 'есть подсказка', 'без подсказки', out[-1][4], '')
     os.remove(os.path.join(r, 'docs/ai/STATE.md'))
     S('старт: нет STATE', 'session-start', {'source': 'startup'}, r, 'ctx', 'STATE.md нет')
+    write(r, 'docs/ai/LESSONS.md', '## Уроки\n| Дата | Что случилось → как правильно | Область | Статус | Повторов |\n|---|---|---|---|---|\n'
+          '| 01.09.2026 | Кириллица в именах ломала сборку → только латиница | общий | активен | 5 |\n'
+          '| 02.09.2026 | Поставил пакет без «да» → не ставить | общий | кандидат | 1 |\n'
+          '| 03.09.2026 | Забывал BOM у .ps1 → закрыто хуком check-python | общий | закрыт | 3 |\n')
+    S('старт: урок повторился без проверки — сказать', 'session-start', {'source': 'startup'}, r, 'ctx', 'повторились 2 раза')
+    write(r, 'docs/ai/LESSONS.md', '## Уроки\n| Дата | Что случилось → как правильно | Область | Статус | Повторов |\n|---|---|---|---|---|\n'
+          '| 01.09.2026 | Кириллица в именах → только латиница; проверяет хук guard-cyrillic | общий | активен | 5 |\n')
+    S('старт: урок с хуком — молчит', 'session-start', {'source': 'startup'}, r, 'ctx')
+    if 'повторились' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная тревога', 'без строки про уроки', out[-1][4], '')
+    write(r, 'docs/ai/PROFILE.md', '## Паспорт проекта\n- Интерфейс: да\n## Профиль работы\n- Доверие: обычное — подтверждено владельцем: да\n')
+    S('старт: проект с интерфейсом — напомнить про браузер', 'session-start', {'source': 'startup'}, r, 'ctx', 'через браузер')
 
     # ход: turn-start → check-docs
     r = new_project(tmp, f'{impl}-s2')
@@ -563,6 +575,95 @@ def scenarios(impl, ps, tmp):
     # scan
     write(r, 'src/bad_ident.ts', 'const ИМЯ = 1\n')
     S('scan: находит и считает', 'scan', b'', r, 'ctx', 'bad_ident.ts', args=['src'])
+
+    # ---- 2.13.0: секрет в чате, регистр, второй сеанс, контекст один раз, чтение вне папки, штамп
+    r = new_project(tmp, f'{impl}-s9')
+    git(r, 'init', '-q'); git(r, 'add', '-A'); git(r, 'commit', '-qm', 'init')
+    hdr = ('начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;'
+           'модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос\n')
+    big = '2026-09-23 23:04:28;77.9;9.1;68.8;7;11;0;3800000;80000;7200;3006;opus-5;high;standard;0;Edit*6;x;y\n'
+    small = '2026-09-23 23:05:28;7.9;1.1;6.8;1;3;0;300000;8000;720;300;opus-5;high;standard;0;;x;y\n'
+    # секрет
+    sec = 'setx OPENROUTER_API_KEY "sk-or-v1-abcdefghijklmnopqrstuvwxyz0123456789"'
+    s9 = S('секрет: setx с ключом — сказать сменить', 'turn-start', ask(sec), r, 'ctx', 'сменить')
+    snapf = K.state_file({'session_id': s9, 'scratchpad_dir': os.path.join(tmp, 'state')}, 'turn')
+    try:
+        snapj = json.load(open(snapf, encoding='utf-8'))
+        masked = ('<секрет>' in snapj.get('prompt', '')) and ('abcdefghijklmnop' not in snapj.get('prompt', ''))
+    except Exception:
+        masked = False
+    if not masked:
+        out[-1] = (out[-1][0], False, 'ключ в снимке хода', 'ключ замаскирован', out[-1][4], '')
+    S('секрет: пароль словами — молчит', 'turn-start', ask('пароль: сменить позже, когда закончим'), r, 'ctx')
+    if 'секрет' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная тревога', 'без подсказки', out[-1][4], '')
+    S('секрет: ключ github', 'turn-start', ask('вот ключ ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'), r, 'ctx', 'сменить')
+    # регистр в точности (PowerShell был регистрозависим)
+    S('точность: «Дословно» с заглавной', 'turn-start', ask('Дословно перенеси выбор ООО вправо'), r, 'ctx', 'дословности')
+    S('точность: «Не просил» с заглавной', 'turn-start', ask('Не просил рамку, убери'), r, 'ctx', 'ничего сверх')
+    # второй сеанс в папке (свой проект: в общем предыдущие сценарии уже оставили чужой замок)
+    r2 = new_project(tmp, f'{impl}-s10')
+    git(r2, 'init', '-q'); git(r2, 'add', '-A'); git(r2, 'commit', '-qm', 'init')
+    r, r_keep = r2, r
+    sa = S('сеанс: первый занимает папку — молчит', 'turn-start', ask('поправь опечатку в README'), r, 'ctx')
+    if 'ещё один сеанс' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная тревога', 'без предупреждения', out[-1][4], '')
+    d2 = dict(ask('а теперь я продолжаю ту же задачу')); d2['session_id'] = sa + '-second'
+    S('сеанс: второй в той же папке — предупредить', 'turn-start', d2, r, 'ctx', 'ещё один сеанс')
+    S('сеанс: второй продолжает — уже молчит', 'turn-start', d2, r, 'ctx')
+    if 'ещё один сеанс' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'повторная тревога', 'без предупреждения', out[-1][4], '')
+    d3 = {'source': 'clear', 'session_id': sa + '-third'}
+    S('сеанс: после /clear старт занимает папку', 'session-start', d3, r, 'ctx', 'Старт сеанса')
+    d4 = dict(ask('продолжаем ту же задачу дальше')); d4['session_id'] = sa + '-third'
+    S('сеанс: тот же сеанс после /clear — молчит', 'turn-start', d4, r, 'ctx')
+    if 'ещё один сеанс' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная тревога после /clear', 'без предупреждения', out[-1][4], '')
+    # контекст: один раз при переходе порога, потом каждый пятый ход
+    write(r, 'docs/ai/timing.csv', hdr + small + big)
+    S('контекст: первый ход над порогом — подсказка владельцу', 'turn-start', d4, r, 'ctx', 'введите /clear')
+    write(r, 'docs/ai/timing.csv', hdr + small + big + big)
+    S('контекст: второй ход подряд — молчит', 'turn-start', d4, r, 'ctx')
+    if '/clear' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'обои', 'без подсказки', out[-1][4], '')
+    write(r, 'docs/ai/timing.csv', hdr + small + big * 5)
+    S('контекст: пятый ход подряд — напомнить', 'turn-start', d4, r, 'ctx', 'введите /clear')
+    write(r, 'docs/ai/timing.csv', hdr + big * 3 + small)
+    S('контекст: упал ниже порога — молчит', 'turn-start', d4, r, 'ctx')
+    if '/clear' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'подсказка', 'без подсказки', out[-1][4], '')
+    os.remove(os.path.join(r, 'docs/ai/timing.csv'))
+    r = r_keep
+    # чтение вне папки
+    S('чтение: файл вне папки — вопрос', 'pre-read', {'tool_name': 'Read', 'tool_input': {'file_path': '/home/other/proj/README.md'}}, r, 'ask', 'вне папки')
+    S('чтение: свой файл — молча', 'pre-read', {'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}}, r, 'allow')
+    S('чтение: поиск в чужой папке — вопрос', 'pre-read', {'tool_name': 'Grep', 'tool_input': {'pattern': 'x', 'path': '/home/other/proj'}}, r, 'ask', 'вне папки')
+    S('чтение: поиск без пути — молча', 'pre-read', {'tool_name': 'Grep', 'tool_input': {'pattern': 'x'}}, r, 'allow')
+    S('оболочка: путь в чужую папку — вопрос', 'guard-shell', {'tool_input': {'command': 'cat /home/other/proj/docs/ai/STATE.md'}}, r, 'ask', 'вне папки')
+    S('оболочка: домашний конфиг — вопрос', 'guard-shell', {'tool_input': {'command': 'cat ~/.gitconfig'}}, r, 'ask', 'вне папки')
+    S('оболочка: системный путь — молча', 'guard-shell', {'tool_input': {'command': '/usr/bin/python3 -V'}}, r, 'allow')
+    S('оболочка: временная папка — молча', 'guard-shell', {'tool_input': {'command': 'ls /tmp/scratch'}}, r, 'allow')
+    S('оболочка: адрес сайта — молча', 'guard-shell', {'tool_input': {'command': 'curl -s https://example.com/home/page'}}, r, 'allow')
+    # docs/ai под замком обновления — и через оболочку тоже
+    write(r, '.claude/starter.lock', 'update\n')
+    S('обновление: копирование в docs/ai командой — блок', 'guard-shell', {'tool_input': {'command': 'cp _starter/docs/ai/STATE.md docs/ai/STATE.md'}}, r, 'block', 'starter.lock')
+    S('обновление: чтение docs/ai командой — молча', 'guard-shell', {'tool_input': {'command': 'cat docs/ai/STATE.md'}}, r, 'allow')
+    os.remove(os.path.join(r, '.claude/starter.lock'))
+    # штамп STATE: ставится и когда хук блокирует, и при повторном Stop; чужой head не затирается
+    write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n')
+    git(r, 'add', '-A'); git(r, 'commit', '-qm', 'state')
+    hd = subprocess.run(['git', '-C', r, 'rev-parse', '--short', 'HEAD'], capture_output=True, text=True).stdout.strip()
+    s10 = S('штамп: снимок хода', 'turn-start', ask('добавь файл'), r, 'ctx')
+    write(r, 'src/nohdr.py', 'print(1)\n')
+    S('штамп: хук блокирует из-за шапки', 'check-docs', {'session_id': s10}, r, 'block', 'Назначение')
+    st = open(os.path.join(r, 'docs/ai/STATE.md'), encoding='utf-8').read()
+    if f'head: {hd}' not in st or '2026-01-03' in st:
+        out[-1] = (out[-1][0], False, 'штамп не поставлен при блокировке', 'штамп есть', st, '')
+    write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 25.09.2026, вечер, head: 2c51ac9 в /srv/panel)\n- Работает: экран\n')
+    S('штамп: повторный Stop — тоже штампует', 'check-docs', {'session_id': s10, 'stop_hook_active': True}, r, 'allow')
+    st = open(os.path.join(r, 'docs/ai/STATE.md'), encoding='utf-8').read()
+    if 'в /srv/panel' not in st or '2c51ac9' not in st or '25.09.2026' in st:
+        out[-1] = (out[-1][0], False, 'чужой head затёрт или дата не обновлена', 'дата новая, head владельца цел', st, '')
     return out
 
 

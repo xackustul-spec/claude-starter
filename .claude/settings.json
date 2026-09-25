@@ -149,6 +149,23 @@
             "timeout": 20
           }
         ]
+      },
+      {
+        "matcher": "Read|Glob|Grep|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/pre-write.ps1"
+            ],
+            "timeout": 20
+          }
+        ]
       }
     ],
     "PostToolUse": [

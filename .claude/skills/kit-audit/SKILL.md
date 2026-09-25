@@ -50,7 +50,7 @@ argument-hint: "[health] [путь к набору, если он лежит о�
 - Все файлы набора на месте, версия хуков совпадает с ОС (Windows — `powershell.exe` в
   `settings.json`; Linux/macOS — `run.sh`), Python 3 доступен.
 - Тесты хуков: `python3 .claude/hooks/tests/run_tests.py` (Windows: `py -3 …`) → «всё в порядке».
-- Блок набора в CLAUDE.md ≤ ~100 строк, весь файл ≤ 200; противоречия между CLAUDE.md,
+- Блок набора в CLAUDE.md не длиннее лимита из его шапки, весь файл ≤ 200; противоречия между CLAUDE.md,
   rules, skills, docs/ai.
 - STATE.md: дата и `head:` против `git log -1`; LESSONS: уроки с 2+ повторами без хука/теста;
   KNOWLEDGE: устаревшие факты; PROJECT_MAP: команды реально запускаются.

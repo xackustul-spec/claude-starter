@@ -132,12 +132,12 @@ def main():
     slow = [r for r in rows if r['total'] >= 120]
     heavy = [r for r in rows if r['calls'] >= 25]
     thinky = [r for r in rows if r['model_s'] >= 90 and r['calls'] <= 5]
-    ctx = [r for r in rows if r['req'] and (r['cread'] + r['cwrite']) / float(r['req']) >= 150000]
+    ctx = [r for r in rows if r['req'] and (r['cread'] + r['cwrite']) / float(r['req']) >= 200000]
     print('\nПризнаки:')
     print('  ходов дольше 2 мин: %d из %d' % (len(slow), n))
     print('  ходов с 25+ вызовами: %d' % len(heavy))
     print('  ходов, где долго думала модель при 5 и меньше вызовах: %d' % len(thinky))
-    print('  ходов, где в каждый запрос уходило 150 тыс. токенов и больше (контекст раздут): %d' % len(ctx))
+    print('  ходов, где в каждый запрос уходило 200 тыс. токенов и больше (контекст раздут): %d' % len(ctx))
     out_turns = [r for r in rows if r['outside'] > 0]
     if out_turns:
         print('  ходов, где трогали файлы вне папки проекта: %d — так нельзя, назвать владельцу' % len(out_turns))

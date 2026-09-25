@@ -198,6 +198,16 @@ def guard_shell(data):
                 'Такие конструкции ломаются при передаче через оболочку. Запиши скрипт в файл (LF, ASCII-имя), '
                 "отправь scp в /tmp и выполни: ssh <сервер> 'bash /tmp/<файл>.sh' (см. правило .claude/rules/code.md).",
             ])
+    root = project_dir(data)
+    if update_mode(root) and re.search(r'docs[\\/]ai[\\/]', cmd, re.I) and WRITE_VERB_RE.search(cmd):
+        block(['Идёт обновление набора (есть .claude/starter.lock), а команда пишет в docs/ai. docs/ai — записи '
+               'владельца, их не трогают ни инструментом, ни командой. Закончи обновление, убери starter.lock, '
+               'и только потом правь документы.'])
+    outs = shell_outside_paths(cmd, root)
+    if outs:
+        ask('В команде путь вне папки проекта: ' + ', '.join(outs[:3]) + '. Папка этого проекта — ' + root +
+            '. Каждый проект работает только в своей папке: возьмите то же самое изнутри проекта, а если '
+            'нужного здесь нет — скажите владельцу, что понадобилось снаружи и зачем, и получите «да».')
     tgt = shell_write_target(cmd)
     if tgt:
         ask('Запись файла кода через оболочку: ' + tgt + '. Так обходятся проверки набора — кириллица в именах, '
@@ -647,11 +657,35 @@ def outside_project(path, root):
     return full
 
 
+WIN_PATH_RE = re.compile(r'(?<![\w])([A-Za-z]:[\\/][^\s"\'<>|;&)]+)')
+UNIX_PATH_RE = re.compile(r'(?<![\w/.\-])((?:/(?:home|srv|mnt|media|data|Users|root)|~)/[^\s"\'<>|;&)]+)')
+SYS_PATH_RE = re.compile(r'[\\/](Windows|Program Files( \(x86\))?|ProgramData)[\\/]|[\\/]AppData[\\/]', re.I)
+
+
+def shell_outside_paths(cmd, root):
+    # Абсолютные пути в команде, которые ведут за пределы папки проекта (системные папки не считаются).
+    out = []
+    for rx in (WIN_PATH_RE, UNIX_PATH_RE):
+        for m in rx.finditer(cmd):
+            p = m.group(1).rstrip('.,:')
+            if SYS_PATH_RE.search(p):
+                continue
+            full = outside_project(p, root)
+            if full and full not in out:
+                out.append(full)
+    return out
+
+
+def guard_read(data):
+    # Один процесс на Read/Glob/Grep/NotebookEdit: чужая папка — вопрос владельцу.
+    guard_outside(data)
+
+
 def guard_outside(data):
     # Каждый проект работает в своей папке: файл снаружи — вопрос владельцу, даже при полном доверии.
     ti = data.get('tool_input') or {}
     root = project_dir(data)
-    full = outside_project(ti.get('file_path') or ti.get('path'), root)
+    full = outside_project(ti.get('file_path') or ti.get('path') or ti.get('notebook_path'), root)
     if full is None:
         return
     ask('Файл вне папки проекта: ' + full + '. Папка этого проекта — ' + root + '. Каждый проект '
@@ -1128,26 +1162,43 @@ def write_timing(data, root):
 CTX_LIMIT = 200000
 
 
-def context_hint(root):
-    # Контекст на один запрос по последней записи лога; раздут — предложить закрыть тему.
-    rows = timing_tail(timing_path(root), 1)
-    if not rows:
-        return ''
-    p = rows[0].split(';')
+def context_per_request(row):
+    p = row.split(';')
     if len(p) < 11:
-        return ''
+        return None
     try:
         req = int(p[5])
-        ctx = (int(p[6]) + int(p[7]) + int(p[8])) / max(1, req)
+        if req < 2:
+            return None
+        return (int(p[6]) + int(p[7]) + int(p[8])) / req
     except Exception:
+        return None
+
+
+def context_hint(root):
+    # Контекст на один запрос по логу. Раздут — сказать один раз при переходе порога и потом каждый
+    # пятый ход, а не каждый: иначе напоминание становится обоями (ERP: 41 ход из 42 над порогом).
+    rows = timing_tail(timing_path(root), 12)
+    if not rows:
         return ''
-    if req < 2 or ctx < CTX_LIMIT:
+    ctx = context_per_request(rows[-1])
+    if ctx is None or ctx < CTX_LIMIT:
         return ''
-    return ('Набор: контекст раздут — около %d тыс. токенов на каждый запрос в прошлом ходе. Дойдя до места, '
-            'где можно остановиться (правка доведена, проверка показана), закрой тему скиллом kit-handover: '
-            'дописать в документы всё, чего в них ещё нет, задать висящие вопросы владельцу сейчас, обновить '
-            '«Сейчас» и «Следующий шаг», дать фразу для продолжения и предложить владельцу ввести /clear. '
-            'Посреди начатой правки или незаданного вопроса не обрывать.\n' % (ctx / 1000))
+    streak = 0
+    for row in reversed(rows):
+        c = context_per_request(row)
+        if c is None or c < CTX_LIMIT:
+            break
+        streak += 1
+    if streak != 1 and streak % 5 != 0:
+        return ''
+    k = int(ctx / 1000)
+    return ('Набор: контекст около %d тыс. токенов на каждый запрос — каждый ход дорожает и замедляется. '
+            'Довести текущую правку до места, где можно остановиться, затем закрыть тему по kit-handover '
+            '(дописать в документы всё, чего в них нет, задать висящие вопросы, обновить «Сейчас» и '
+            '«Следующий шаг») и в конце ответа сказать владельцу отдельной строкой: «Контекст ~%d тыс. '
+            'на запрос — введите /clear, всё нужное записано». Посреди начатой правки или незаданного '
+            'вопроса не обрывать.\n' % (k, k))
 
 
 def timing_notice(root):
@@ -1177,12 +1228,69 @@ def timing_notice(root):
             'токенов на ход около %.0f тыс.%s' % (len(vals), total, tools, share, tok, tail))
 
 
+# ------------------------------------------- секрет, вставленный владельцем в чат
+PASTED_SECRET_RE = re.compile(
+    r'sk-[A-Za-z0-9_-]{16,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,}'
+    r'|xox[abprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----'
+    r'|(?:\b(?:setx|export|set)\s+\w*(?:KEY|TOKEN|SECRET|PASS)\w*[=\s]+["\']?)([^\s"\']{8,})'
+    r'|(?:\b(?:api[_-]?key|token|secret|password|passwd|пароль)\s*[:=]\s*["\']?)([A-Za-z0-9!@#$%^&*()_+=\-\[\]{}.,;/\\|~]{8,})',
+    re.I)
+SECRET_HINT = ('Набор: в сообщении владельца похоже на секрет (ключ, токен или пароль). Первой строкой ответа сказать, '
+               'что он засветился в переписке и его нужно сменить, и куда вводить новый (переменная среды или .env, '
+               'не чат). В файлы, документы и команды этот секрет не записывать.\n')
+
+
+def mask_secrets(text):
+    # Значение секрета в логе заменяется меткой; имя переменной и команда остаются.
+    def rep(m):
+        whole = m.group(0)
+        for g in (1, 2):
+            v = m.group(g)
+            if v:
+                return whole[:len(whole) - len(v)] + '<секрет>'
+        return '<секрет>'
+    return PASTED_SECRET_RE.sub(rep, text)
+
+
+# ------------------------------------------- второй сеанс Claude в той же папке
+SESSION_LOCK_MIN = 10
+
+
+def session_lock_path(root):
+    return os.path.join(root, '.claude', 'session.lock')
+
+
+def claim_session(data, root):
+    # Записать себя как текущий сеанс папки; вернуть предупреждение, если тут только что работал другой.
+    lock = session_lock_path(root)
+    sid = str(data.get('session_id') or '')
+    notice = ''
+    try:
+        j = json.load(open(lock, encoding='utf-8'))
+        age = time.time() - float(j.get('ts') or 0)
+        if sid and j.get('sid') and j.get('sid') != sid and 0 <= age < SESSION_LOCK_MIN * 60:
+            notice = ('Набор: в этой папке работает ещё один сеанс Claude (его последний ход — %d мин назад). Два '
+                      'сеанса в одной папке затирают правки друг друга и делают одну работу дважды. Первой строкой '
+                      'предупредить владельца и до его ответа ничего не править — только читать и отвечать.\n'
+                      % max(0, int(age // 60)))
+    except Exception:
+        pass
+    try:
+        os.makedirs(os.path.dirname(lock), exist_ok=True)
+        with open(lock, 'w', encoding='utf-8') as fh:
+            json.dump({'sid': sid, 'ts': time.time()}, fh)
+    except Exception:
+        pass
+    return notice
+
+
 def turn_start(data):
     root = project_dir(data)
     prompt_raw = str(data.get('prompt') or '')
+    has_secret = bool(PASTED_SECRET_RE.search(prompt_raw))
     snap = {'ts': time.time(), 'head': None, 'status': {},
             'exact': bool(EXACT_RE.search(prompt_raw)),
-            'prompt': re.sub(r'\s+', ' ', prompt_raw).strip()[:140]}
+            'prompt': mask_secrets(re.sub(r'\s+', ' ', prompt_raw).strip())[:140]}
     head = git(root, 'rev-parse', 'HEAD')
     if head is not None:
         snap['head'] = head.strip()
@@ -1194,9 +1302,14 @@ def turn_start(data):
             json.dump(snap, fh)
     except Exception:
         pass
+    other = claim_session(data, root)
     prompt = str(data.get('prompt') or '').strip()
     if prompt.startswith('/'):
         return
+    if other:
+        sys.stdout.write(other)
+    if has_secret:
+        sys.stdout.write(SECRET_HINT)
     if snap['exact']:
         sys.stdout.write(EXACT_HINT)
     ctx = context_hint(root)
@@ -1207,15 +1320,13 @@ def turn_start(data):
         sys.stdout.write(hint)
     if len(prompt) < 12:
         return
-    sys.stdout.write('Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог». '
-                     'Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.\n')
+    sys.stdout.write('Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог» '
+                     '(если владелец не задал форму ответа). Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.\n')
 
 
 def check_docs(data):
     root = project_dir(data)
     write_timing(data, root)
-    if data.get('stop_hook_active') is True:
-        return
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
         return
@@ -1244,8 +1355,14 @@ def check_docs(data):
             except Exception:
                 pass
     # Свой же лог хронометража не считается работой этого хода.
-    touched = {f for f in touched if not re.search(r'(^|/)docs/ai/timing(\.old)?\.csv$', f)}
+    touched = {f for f in touched if not re.search(r'(^|/)docs/ai/timing(\.old)?\.csv$|(^|/)\.claude/session\.lock$', f)}
     deleted = {f for f, (st, sig) in now.items() if 'D' in st}
+    # Штамп — до любой блокировки и при повторном проходе тоже: иначе он не ставился ровно тогда,
+    # когда хук что-то заметил, и head в STATE отставал на десятки коммитов.
+    if touched:
+        stamp_state(root, top)
+    if data.get('stop_hook_active') is True:
+        return
     code, docs = [], False
     for f in sorted(touched):
         if f in deleted:
@@ -1267,8 +1384,6 @@ def check_docs(data):
     if not code:
         if doc_msgs:
             block(['Перед завершением: ' + ' '.join(doc_msgs)])
-        if touched:
-            stamp_state(root, top)
         return
     no_header = []
     for f in code:
@@ -1292,11 +1407,10 @@ def check_docs(data):
                     '. Добавь шапку (правило .claude/rules/code-headers.md).')
     if msgs:
         block(['Перед завершением: ' + ' '.join(msgs)])
-    stamp_state(root, top)
 
 
 # Лимиты строк: подключённые всегда документы — жёстче, остальные — 300.
-DOC_LIMITS = {'PROFILE.md': 40, 'STATE.md': 60, 'KNOWLEDGE.md': 80, 'LESSONS.md': 40, 'INDEX.md': 60}
+DOC_LIMITS = {'PROFILE.md': 40, 'STATE.md': 60, 'KNOWLEDGE.md': 80, 'LESSONS.md': 40, 'INDEX.md': 60, 'PROJECT_MAP.md': 40}
 DOC_LIMIT_DEFAULT = 300
 
 
@@ -1334,7 +1448,7 @@ def doc_problems(root, top, touched):
     return msgs
 
 
-STAMP_RE = re.compile(r'(обновлено:\s*)([^,)\n]*)(,\s*head:\s*)([^)\n]*)(\))')
+STAMP_RE = re.compile(r'(обновлено:\s*)([^)\n]*?)(,\s*head:\s*)([^)\n]*)(\))')
 
 
 def stamp_state(root, top):
@@ -1348,7 +1462,9 @@ def stamp_state(root, top):
         if not m or 'TODO' in m.group(0):
             return
         head = (git(top, 'rev-parse', '--short', 'HEAD') or '').strip()
-        new = m.group(1) + time.strftime('%Y-%m-%d') + m.group(3) + (head or m.group(4)) + m.group(5)
+        # Владелец записал не просто sha («2c51ac9 в /srv/panel») — его head не трогаем, обновляем только дату.
+        keep = m.group(4) if (not head or not re.fullmatch(r'\s*[0-9a-fA-F]{6,40}\s*', m.group(4))) else head
+        new = m.group(1) + time.strftime('%Y-%m-%d') + m.group(3) + keep + m.group(5)
         if new == m.group(0):
             return
         txt = txt[:m.start()] + new + txt[m.end():]
@@ -1406,6 +1522,7 @@ def session_start(data):
     lines = ['[claude-starter] Старт сеанса' + (f' ({src})' if src else '') + '.']
     state_path = os.path.join(root, 'docs', 'ai', 'STATE.md')
     cleanup_state(data)
+    claim_session(data, root)
     if os.path.isfile(os.path.join(root, 'INSTALL.md')) and os.path.isfile(os.path.join(root, 'VERSION')):
         lines.append(f'Это исходник набора claude-starter (версия {read_version(root)}), не проект: не устанавливать '
                      'и не заполнять docs/ai. Работа здесь — /kit-harvest (уроки из проектов), выпуск версий.')
@@ -1451,8 +1568,56 @@ def session_start(data):
     note = timing_notice(root)
     if note:
         lines.append(note)
+    note = lessons_notice(root)
+    if note:
+        lines.append(note)
+    note = interface_notice(root)
+    if note:
+        lines.append(note)
     lines.append('Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.')
     sys.stdout.write('\n'.join(lines) + '\n')
+
+
+# ------------------------------------------- уроки, которые повторяются, а проверки нет
+def lessons_notice(root):
+    # Урок повторился 2 раза и больше, статус не «закрыт», в строке нет ссылки на хук/тест/правило —
+    # лестница «кандидат → активен → хук» застряла; сказать одной строкой, что предложить владельцу.
+    p = os.path.join(root, 'docs', 'ai', 'LESSONS.md')
+    try:
+        txt = open(p, encoding='utf-8-sig', errors='replace').read()
+    except Exception:
+        return ''
+    stuck = []
+    for line in txt.splitlines():
+        if not line.startswith('|'):
+            continue
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        if len(cells) < 5 or cells[0].startswith('---') or cells[0].lower().startswith('дата'):
+            continue
+        status = cells[3].lower()
+        m = re.search(r'\d+', cells[4])
+        reps = int(m.group(0)) if m else 0
+        if reps < 2 or 'закрыт' in status:
+            continue
+        if re.search(r'хук|тест|линтер|rules/|\.md\b|правил', line, re.I):
+            continue
+        stuck.append(cells[1][:60])
+    if not stuck:
+        return ''
+    return ('Уроки: %d повторились 2 раза и больше, а проверки (хук, тест, правило) для них нет — «%s». '
+            'Предложить владельцу закрепить проверкой (project-memory, «уроки»).' % (len(stuck), '»; «'.join(stuck[:2])))
+
+
+def interface_notice(root):
+    # В паспорте проекта есть интерфейс: вид проверяется только через браузер, а не чтением вёрстки.
+    try:
+        txt = open(os.path.join(root, 'docs', 'ai', 'PROFILE.md'), encoding='utf-8-sig', errors='replace').read()
+    except Exception:
+        return ''
+    if not re.search(r'интерфейс\s*:\s*(да|есть)', txt, re.I):
+        return ''
+    return ('Проект с интерфейсом: вид проверяется только через браузер (снимок экрана), не чтением вёрстки. '
+            'Браузерных инструментов в сеансе нет — предложить владельцу подключить их первой строкой.')
 
 
 # ------------------------------------------------------------- версия набора
@@ -1460,7 +1625,7 @@ def session_start(data):
 KIT_SKIP_TOP = {'.git', '.gitignore', 'docs', 'inbox', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json',
                 'VERSION', 'CHANGELOG.md'}
 KIT_SKIP_REL = {'.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json',
-                '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock'}
+                '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock', '.claude/session.lock'}
 
 
 def file_hash(path):
@@ -1629,7 +1794,7 @@ def scan(paths, root):
 COMMANDS = {
     'guard-shell': guard_shell, 'guard-cyrillic': guard_cyrillic, 'guard-instructions': guard_instructions,
     'rules-on-write': rules_on_write, 'check-python': check_python, 'turn-start': turn_start,
-    'session-start': session_start, 'check-docs': check_docs, 'pre-write': pre_write,
+    'session-start': session_start, 'check-docs': check_docs, 'pre-write': pre_write, 'pre-read': guard_read,
 }
 
 if __name__ == '__main__':

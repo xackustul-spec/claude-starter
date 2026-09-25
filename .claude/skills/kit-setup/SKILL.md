@@ -96,7 +96,7 @@ disable-model-invocation: true
   `const ПРОБА = 1` — запись должна быть заблокирована хуком. Запись прошла — хуки ещё не
   подхвачены: удалить `_test.ts`, в коммит не включать, в STATE «Следующий шаг» записать
   «повторить проверку хука после перезапуска», в отчёте попросить перезапустить Claude Code.
-- Попросить владельца ввести `/context`: в памяти CLAUDE.md, PROFILE, STATE, KNOWLEDGE, LESSONS, INDEX.
+- Попросить владельца ввести `/context`: в памяти CLAUDE.md, PROFILE, STATE, LESSONS, INDEX (KNOWLEDGE — по надобности, его там нет и не должно быть).
 - STATE.md: «Сейчас», «Следующий шаг», `head:` = текущий короткий sha.
 - Версия и отпечатки файлов набора: `python3 .claude/hooks/kit_hooks.py manifest <папка набора> <источник>`
   (Windows: `powershell -NoProfile -ExecutionPolicy Bypass -File .claude\hooks\kit-version.ps1 manifest …`);
