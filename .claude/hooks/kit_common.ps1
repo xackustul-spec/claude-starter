@@ -74,6 +74,7 @@ function Get-StateFile($data, [string]$kind) {
 function Get-RelPath([string]$path, [string]$root) {
     $p = $path -replace '\\', '/'
     $r = ($root -replace '\\', '/').TrimEnd('/')
+    if ($p.TrimEnd('/').ToLowerInvariant() -eq $r.ToLowerInvariant()) { return '' }  # сама папка проекта — внутри
     if ($p.ToLowerInvariant().StartsWith($r.ToLowerInvariant() + '/')) { return $p.Substring($r.Length + 1) }
     return $null
 }

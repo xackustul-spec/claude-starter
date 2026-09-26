@@ -698,6 +698,9 @@ def scenarios(impl, ps, tmp):
     S('оболочка: системный путь — молча', 'guard-shell', {'tool_input': {'command': '/usr/bin/python3 -V'}}, r, 'allow')
     S('оболочка: временная папка — молча', 'guard-shell', {'tool_input': {'command': 'ls /tmp/scratch'}}, r, 'allow')
     S('оболочка: адрес сайта — молча', 'guard-shell', {'tool_input': {'command': 'curl -s https://example.com/home/page'}}, r, 'allow')
+    S('оболочка: сама папка проекта — молча', 'guard-shell', {'tool_input': {'command': 'cd ' + r + ' && ls'}}, r, 'allow')
+    S('оболочка: папка проекта со слэшем — молча', 'guard-shell', {'tool_input': {'command': 'ls ' + r + '/'}}, r, 'allow')
+    S('чтение: сама папка проекта — молча', 'pre-read', {'tool_name': 'Glob', 'tool_input': {'pattern': '*.md', 'path': r}}, r, 'allow')
     # docs/ai под замком обновления — и через оболочку тоже
     write(r, '.claude/starter.lock', 'update\n')
     S('обновление: копирование в docs/ai командой — блок', 'guard-shell', {'tool_input': {'command': 'cp _starter/docs/ai/STATE.md docs/ai/STATE.md'}}, r, 'block', 'starter.lock')

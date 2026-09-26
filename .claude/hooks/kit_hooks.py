@@ -90,6 +90,8 @@ def state_file(data, kind):
 def rel_path(path, root):
     p = path.replace('\\', '/')
     r = root.replace('\\', '/').rstrip('/')
+    if p.rstrip('/').lower() == r.lower():
+        return ''  # сама папка проекта — внутри
     if p.lower().startswith(r.lower() + '/'):
         return p[len(r) + 1:]
     return None
