@@ -1233,6 +1233,26 @@ function Get-IndexHint([string]$root, [string]$prompt) {
     $words = (@($top[0][4] | Select-Object -First 2) | ForEach-Object { '«' + $_ + '…»' }) -join ', '
     return ('Указатель: по словам запроса (' + $words + ') подходит ' + $docs + ' — сначала посмотреть там, и только если ответа нет, идти в код или на сервер.')
 }
+# ------------------------------------------- «доделывай» без предмета: брать пункты по порядку, не стоять
+$script:VagueRe = '^\W*(доделывай|доделай|продолжай|продолжи|дальше|давай дальше|остальное|делай|работай|ну что|ты закончил|закончил\??|всё готово\??|все готово\??|остальное сделано\??)\W*$'
+$script:VagueHint = 'Набор: владелец не назвал предмет. Взять пункты из «Следующий шаг» в STATE.md по порядку: каждый — сделать, проверить, закоммитить, одна строка отчёта — и следующий, пока не кончатся или владелец не вмешается. Что ждёт владельца — записать в «Ждёт владельца» и пропустить, не стоять. Вопрос, на который ответит эталон, код, сервер или интернет, — задать им, не владельцу.'
+function Get-StateSection([string]$txt, [string]$title) {
+    $m = [regex]::Match($txt, '(?ms)^## ' + [regex]::Escape($title) + '[^\n]*\n(.*?)(?=^## |\z)')
+    if ($m.Success) { return $m.Groups[1].Value } else { return '' }
+}
+function Get-WaitingNotice([string]$root) {
+    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
+    if (-not [System.IO.File]::Exists($p)) { return '' }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8).TrimStart([char]0xFEFF) } catch { return '' }
+    $item = '^\s*(\d+[а-я]?[.)]|[-*•])\s*\S'
+    $wait = @((Get-StateSection $txt 'Ждёт владельца') -split "`n" | Where-Object { [regex]::IsMatch($_, $item) -and -not [regex]::IsMatch($_, '[—-]\s*$') })
+    $nxt = @((Get-StateSection $txt 'Следующий шаг') -split "`n" | Where-Object { [regex]::IsMatch($_, $item) })
+    if ($wait.Count -eq 0 -or $nxt.Count -eq 0) { return '' }
+    $first = [regex]::Replace([regex]::Replace($nxt[0], '^\s*(\d+[а-я]?[.)]|[-*•])\s*', ''), '\s+', ' ').Trim('*', ' ')
+    $first = Get-Cut $first 90
+    return ('Ждёт владельца: ' + $wait.Count + ' пункт(а) — их не ждать и не переспрашивать. Следующий шаг: «' + $first + '» — брать его и идти по списку дальше.')
+}
 function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data
     $ts = 0
@@ -1257,6 +1277,7 @@ function Invoke-TurnStart($data) {
     if ($other) { Write-Out $other }
     if ($hasSecret) { Write-Out $script:SecretHint }
     if (-not $prompt.StartsWith('<')) { $ih = Get-IndexHint $root $prompt; if ($ih) { Write-Out $ih } }
+    if ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
     if ($isExact) { Write-Out $script:ExactHint }
     $ctxHint = Get-ContextHint $root
     if ($ctxHint) { Write-Out $ctxHint }
@@ -1718,6 +1739,8 @@ function Invoke-SessionStart($data) {
     $note = Get-LessonsNotice $root
     if ($note) { $lines += $note }
     $note = Get-OvergrownNotice $root
+    if ($note) { $lines += $note }
+    $note = Get-WaitingNotice $root
     if ($note) { $lines += $note }
     $note = Get-InterfaceNotice $root
     if ($note) { $lines += $note }

@@ -1446,6 +1446,35 @@ def index_hint(root, prompt):
             'идти в код или на сервер.\n' % (words, docs))
 
 
+# ------------------------------------------- «доделывай» без предмета: брать пункты по порядку, не стоять
+VAGUE_RE = re.compile(r'^\W*(доделывай|доделай|продолжай|продолжи|дальше|давай дальше|остальное|делай|работай|'
+                      r'ну что|ты закончил|закончил\??|всё готово\??|все готово\??|остальное сделано\??)\W*$', re.I)
+VAGUE_HINT = ('Набор: владелец не назвал предмет. Взять пункты из «Следующий шаг» в STATE.md по порядку: каждый — '
+              'сделать, проверить, закоммитить, одна строка отчёта — и следующий, пока не кончатся или владелец не '
+              'вмешается. Что ждёт владельца — записать в «Ждёт владельца» и пропустить, не стоять. Вопрос, на который '
+              'ответит эталон, код, сервер или интернет, — задать им, не владельцу.\n')
+
+
+def state_section(txt, title):
+    m = re.search(r'^## ' + re.escape(title) + r'[^\n]*\n(.*?)(?=^## |\Z)', txt, re.M | re.S)
+    return m.group(1) if m else ''
+
+
+def waiting_notice(root):
+    # «Ждёт владельца» не пусто, а «Следующий шаг» есть — не стоять: назвать, что брать.
+    try:
+        txt = open(os.path.join(root, 'docs', 'ai', 'STATE.md'), encoding='utf-8-sig', errors='replace').read()
+    except Exception:
+        return ''
+    wait = [l for l in state_section(txt, 'Ждёт владельца').splitlines() if re.match(r'\s*(\d+[а-я]?[.)]|[-*•])\s*\S', l) and not re.search(r'[—-]\s*$', l)]
+    nxt = [l for l in state_section(txt, 'Следующий шаг').splitlines() if re.match(r'\s*(\d+[а-я]?[.)]|[-*•])\s*\S', l)]
+    if not wait or not nxt:
+        return ''
+    first = re.sub(r'\s+', ' ', re.sub(r'^\s*(\d+[а-я]?[.)]|[-*•])\s*', '', nxt[0])).strip('* ')[:90]
+    return ('Ждёт владельца: %d пункт(а) — их не ждать и не переспрашивать. Следующий шаг: «%s» — брать его и идти '
+            'по списку дальше.' % (len(wait), first))
+
+
 def turn_start(data):
     root = project_dir(data)
     prompt_raw = str(data.get('prompt') or '')
@@ -1476,6 +1505,8 @@ def turn_start(data):
         ih = index_hint(root, prompt)
         if ih:
             sys.stdout.write(ih)
+    if VAGUE_RE.search(prompt):
+        sys.stdout.write(VAGUE_HINT)
     if snap['exact']:
         sys.stdout.write(EXACT_HINT)
     ctx = context_hint(root)
@@ -1800,6 +1831,9 @@ def session_start(data):
     if note:
         lines.append(note)
     note = overgrown_notice(root)
+    if note:
+        lines.append(note)
+    note = waiting_notice(root)
     if note:
         lines.append(note)
     note = interface_notice(root)
