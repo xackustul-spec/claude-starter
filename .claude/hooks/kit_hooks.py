@@ -1475,6 +1475,85 @@ def waiting_notice(root):
             'по списку дальше.' % (len(wait), first))
 
 
+# ------------------------------------------- главная задача: последняя строка ответа, вопрос не останавливает
+MAIN_TASK_TAIL = 'Параллельно выполняю главную задачу'
+MAIN_TASK_EMPTY_RE = re.compile(r'^(—|-|–|нет|пусто|TODO.*|\(.*\))?$', re.I)
+
+
+def main_task(root):
+    # «Главная задача:» в «Сейчас» STATE.md — ТЗ владельца; живёт там, пока он не сказал «готово».
+    try:
+        txt = open(os.path.join(root, 'docs', 'ai', 'STATE.md'), encoding='utf-8-sig', errors='replace').read()
+    except Exception:
+        return ''
+    m = re.search(r'^\s*(?:[-*•]\s*)?\**Главная задача\**\s*:\s*(.*?)\s*$', txt, re.M)
+    if not m:
+        return ''
+    v = m.group(1).strip('* ').strip()
+    if MAIN_TASK_EMPTY_RE.match(v):
+        return ''
+    return re.sub(r'\s+', ' ', v)[:120]
+
+
+def last_answer(path, since):
+    # Последний текст ответа Claude в этом ходе — чтобы проверить его последнюю строку.
+    last, last_ts = '', -1.0
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as fh:
+            if size > TIMING_TAIL:
+                fh.seek(size - TIMING_TAIL)
+                fh.readline()
+            raw = fh.read()
+    except Exception:
+        return ''
+    for line in raw.split(b'\n'):
+        if b'"assistant"' not in line or b'"text"' not in line:
+            continue
+        try:
+            rec = json.loads(line.decode('utf-8', 'replace'))
+        except Exception:
+            continue
+        if not isinstance(rec, dict) or rec.get('type') != 'assistant':
+            continue
+        ts = iso_ts(rec.get('timestamp'))
+        if ts is None or ts < since or ts < last_ts:
+            continue
+        msg = rec.get('message') if isinstance(rec.get('message'), dict) else {}
+        content = msg.get('content')
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if isinstance(b, dict) and b.get('type') == 'text' and str(b.get('text') or '').strip():
+                last, last_ts = str(b['text']), ts
+    return last
+
+
+def main_task_hint(root):
+    task = main_task(root)
+    if not task:
+        return ''
+    return ('Главная задача: «%s». Последняя строка ответа — «%s: %s». Вопрос владельцу или побочный ответ '
+            'работу не останавливает: спросил (ответил) — и в том же ходе продолжил главную задачу.\n'
+            % (task, MAIN_TASK_TAIL, task))
+
+
+def main_task_check(data, root, since):
+    # Конец хода: главная задача есть, а последняя строка ответа не про неё — вернуть и продолжить.
+    if data.get('stop_hook_active') is True:
+        return []
+    task = main_task(root)
+    if not task:
+        return []
+    ans = last_answer(str(data.get('transcript_path') or ''), since)
+    if not ans or MAIN_TASK_TAIL.lower() in ans.strip()[-400:].lower():
+        return []
+    return ['Главная задача не закрыта: «%s», а последней строки «%s: …» в ответе нет. Допиши её последней '
+            'строкой и, если ход закончился вопросом или побочным ответом, продолжи главную задачу в этом же '
+            'ходе, не дожидаясь владельца; закончена и принята владельцем — поставь в STATE.md «Главная задача: —».'
+            % (task, MAIN_TASK_TAIL)]
+
+
 def turn_start(data):
     root = project_dir(data)
     prompt_raw = str(data.get('prompt') or '')
@@ -1515,6 +1594,9 @@ def turn_start(data):
     hint = choice_hint(prompt)
     if hint:
         sys.stdout.write(hint)
+    mt = main_task_hint(root)
+    if mt:
+        sys.stdout.write(mt)
     if len(prompt) < 12:
         return
     sys.stdout.write('Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог» '
@@ -1524,15 +1606,18 @@ def turn_start(data):
 def check_docs(data):
     root = project_dir(data)
     write_timing(data, root)
-    head = git(root, 'rev-parse', 'HEAD')
-    if head is None:
-        return
-    top = (git(root, 'rev-parse', '--show-toplevel') or root).strip() or root
-    head = head.strip()
     try:
         snap = json.load(open(state_file(data, 'turn'), encoding='utf-8'))
     except Exception:
         snap = None
+    task_msgs = main_task_check(data, root, float((snap or {}).get('ts') or 0) - 1.0)
+    head = git(root, 'rev-parse', 'HEAD')
+    if head is None:
+        if task_msgs:
+            block(['Перед завершением: ' + ' '.join(task_msgs)])
+        return
+    top = (git(root, 'rev-parse', '--show-toplevel') or root).strip() or root
+    head = head.strip()
     now = git_status_map(top) or {}
     touched = set()
     if snap and snap.get('head'):
@@ -1577,7 +1662,7 @@ def check_docs(data):
                           'значок, рамка, пунктир, колонка, подсказка, блок, поле), удали сейчас; непонятное — '
                           'один короткий вопрос. Сверил, лишнего нет — заканчивай ответ, владельцу про эту '
                           'проверку не писать.')
-    doc_msgs = exact_msgs + doc_problems(root, top, touched - deleted)
+    doc_msgs = task_msgs + exact_msgs + doc_problems(root, top, touched - deleted)
     if not code:
         if doc_msgs:
             block(['Перед завершением: ' + ' '.join(doc_msgs)])
@@ -1836,6 +1921,10 @@ def session_start(data):
     note = waiting_notice(root)
     if note:
         lines.append(note)
+    task = main_task(root)
+    if task:
+        lines.append('Главная задача (не закрыта): «%s» — вести её параллельно всему; последняя строка каждого '
+                     'ответа: «%s: …».' % (task, MAIN_TASK_TAIL))
     note = interface_notice(root)
     if note:
         lines.append(note)

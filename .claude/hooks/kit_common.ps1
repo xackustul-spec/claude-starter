@@ -1253,6 +1253,74 @@ function Get-WaitingNotice([string]$root) {
     $first = Get-Cut $first 90
     return ('Ждёт владельца: ' + $wait.Count + ' пункт(а) — их не ждать и не переспрашивать. Следующий шаг: «' + $first + '» — брать его и идти по списку дальше.')
 }
+# ------------------------------------------- главная задача: последняя строка ответа, вопрос не останавливает
+$script:MainTaskTail = 'Параллельно выполняю главную задачу'
+$script:MainTaskEmptyRe = '^(—|-|–|нет|пусто|TODO.*|\(.*\))?$'
+function Get-MainTask([string]$root) {
+    # «Главная задача:» в «Сейчас» STATE.md — ТЗ владельца; живёт там, пока он не сказал «готово».
+    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
+    if (-not [System.IO.File]::Exists($p)) { return '' }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8).TrimStart([char]0xFEFF) } catch { return '' }
+    $m = [regex]::Match($txt, '(?m)^\s*(?:[-*•]\s*)?\**Главная задача\**\s*:\s*(.*?)\s*$')
+    if (-not $m.Success) { return '' }
+    $v = $m.Groups[1].Value.Trim('*', ' ').Trim()
+    if ([regex]::IsMatch($v, $script:MainTaskEmptyRe, 'IgnoreCase')) { return '' }
+    return (Get-Cut ([regex]::Replace($v, '\s+', ' ')) 120)
+}
+function Get-LastAnswer([string]$path, [double]$since) {
+    # Последний текст ответа Claude в этом ходе — чтобы проверить его последнюю строку.
+    $last = ''; $lastTs = -1.0
+    if ([string]::IsNullOrWhiteSpace($path)) { return '' }
+    $raw = ''
+    try {
+        if (-not [System.IO.File]::Exists($path)) { return '' }
+        $len = (New-Object System.IO.FileInfo $path).Length
+        $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $skip = $false
+            if ($len -gt $script:TimingTail) { [void]$fs.Seek($len - $script:TimingTail, [System.IO.SeekOrigin]::Begin); $skip = $true }
+            $sr = New-Object System.IO.StreamReader($fs, $script:Utf8)
+            if ($skip) { [void]$sr.ReadLine() }
+            $raw = $sr.ReadToEnd()
+        } finally { $fs.Dispose() }
+    } catch { return '' }
+    foreach ($line in ($raw -split "`n")) {
+        if ($line.IndexOf('"assistant"') -lt 0 -or $line.IndexOf('"text"') -lt 0) { continue }
+        $rec = $null
+        try { $rec = $line | ConvertFrom-Json } catch { continue }
+        if ([string](Get-Prop $rec 'type') -ne 'assistant') { continue }
+        $ts = Get-IsoTs (Get-Prop $rec 'timestamp')
+        if (($null -eq $ts) -or ($ts -lt $since) -or ($ts -lt $lastTs)) { continue }
+        $msg = Get-Prop $rec 'message'
+        if ($null -eq $msg) { continue }
+        $content = Get-Prop $msg 'content'
+        if ($null -eq $content) { continue }
+        foreach ($b in @($content)) {
+            if ($null -eq $b) { continue }
+            if ([string](Get-Prop $b 'type') -ne 'text') { continue }
+            $t = [string](Get-Prop $b 'text')
+            if ($t.Trim()) { $last = $t; $lastTs = $ts }
+        }
+    }
+    return $last
+}
+function Get-MainTaskHint([string]$root) {
+    $task = Get-MainTask $root
+    if (-not $task) { return '' }
+    return ('Главная задача: «' + $task + '». Последняя строка ответа — «' + $script:MainTaskTail + ': ' + $task + '». Вопрос владельцу или побочный ответ работу не останавливает: спросил (ответил) — и в том же ходе продолжил главную задачу.')
+}
+function Get-MainTaskCheck($data, [string]$root, [double]$since) {
+    # Конец хода: главная задача есть, а последняя строка ответа не про неё — вернуть и продолжить.
+    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return @() }
+    $task = Get-MainTask $root
+    if (-not $task) { return @() }
+    $ans = Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since
+    if (-not $ans) { return @() }
+    $tail = $ans.Trim(); if ($tail.Length -gt 400) { $tail = $tail.Substring($tail.Length - 400) }
+    if ($tail.ToLowerInvariant().Contains($script:MainTaskTail.ToLowerInvariant())) { return @() }
+    return @('Главная задача не закрыта: «' + $task + '», а последней строки «' + $script:MainTaskTail + ': …» в ответе нет. Допиши её последней строкой и, если ход закончился вопросом или побочным ответом, продолжи главную задачу в этом же ходе, не дожидаясь владельца; закончена и принята владельцем — поставь в STATE.md «Главная задача: —».')
+}
 function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data
     $ts = 0
@@ -1283,6 +1351,8 @@ function Invoke-TurnStart($data) {
     if ($ctxHint) { Write-Out $ctxHint }
     $hint = Get-ChoiceHint $prompt
     if ($hint) { foreach ($line in $hint) { Write-Out $line } }
+    $mt = Get-MainTaskHint $root
+    if ($mt) { Write-Out $mt }
     if ($prompt.Length -lt 12) { return }
     Write-Out 'Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог» (если владелец не задал форму ответа). Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.'
 }
@@ -1395,12 +1465,18 @@ function Set-StateStamp([string]$root, [string]$top) {
 function Invoke-CheckDocs($data) {
     $root = Get-ProjectDir $data
     Write-Timing $data $root
-    $head = Invoke-Git $root @('rev-parse', 'HEAD')
-    if ($null -eq $head) { return }
-    $head = $head.Trim()
-    $top = Invoke-Git $root @('rev-parse', '--show-toplevel'); if ([string]::IsNullOrWhiteSpace($top)) { $top = $root } else { $top = $top.Trim() }
     $snap = $null
     try { $sf = Get-StateFile $data 'turn'; if (Test-Path -LiteralPath $sf) { $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json } } catch { $snap = $null }
+    $since = -1.0
+    if ($snap) { try { $since = [double](Get-Prop $snap 'ts') - 1.0 } catch { $since = -1.0 } }
+    $taskMsgs = @(Get-MainTaskCheck $data $root $since)
+    $head = Invoke-Git $root @('rev-parse', 'HEAD')
+    if ($null -eq $head) {
+        if ($taskMsgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($taskMsgs -join ' ')) }
+        return
+    }
+    $head = $head.Trim()
+    $top = Invoke-Git $root @('rev-parse', '--show-toplevel'); if ([string]::IsNullOrWhiteSpace($top)) { $top = $root } else { $top = $top.Trim() }
     $now = Get-GitStatusMap $top; if ($null -eq $now) { $now = @{} }
     $touched = New-Object System.Collections.Generic.HashSet[string]
     $snapHead = $null; if ($snap) { $snapHead = [string](Get-Prop $snap 'head') }
@@ -1437,7 +1513,7 @@ function Invoke-CheckDocs($data) {
     if (($null -ne $snap) -and (Get-Prop $snap 'exact') -and ($alive.Count -gt 0)) {
         $exactMsgs += 'Владелец требовал сделать дословно. Прежде чем заканчивать: сверь по пунктам его словами, что просили и что сделано; всё, добавленное сверх просьбы (оформление, значок, рамка, пунктир, колонка, подсказка, блок, поле), удали сейчас; непонятное — один короткий вопрос. Сверил, лишнего нет — заканчивай ответ, владельцу про эту проверку не писать.'
     }
-    $docMsgs = @($exactMsgs) + @(Get-DocProblems $root $top $alive)
+    $docMsgs = @($taskMsgs) + @($exactMsgs) + @(Get-DocProblems $root $top $alive)
     if ($code.Count -eq 0) {
         if ($docMsgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($docMsgs -join ' ')) }
         return
@@ -1742,6 +1818,8 @@ function Invoke-SessionStart($data) {
     if ($note) { $lines += $note }
     $note = Get-WaitingNotice $root
     if ($note) { $lines += $note }
+    $task = Get-MainTask $root
+    if ($task) { $lines += ('Главная задача (не закрыта): «' + $task + '» — вести её параллельно всему; последняя строка каждого ответа: «' + $script:MainTaskTail + ': …».') }
     $note = Get-InterfaceNotice $root
     if ($note) { $lines += $note }
     $lines += 'Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.'

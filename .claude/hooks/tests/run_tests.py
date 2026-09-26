@@ -485,6 +485,35 @@ def scenarios(impl, ps, tmp):
     check('хронометраж: старый файл отложен, не потерян',
           os.path.isfile(os.path.join(r, 'docs', 'ai', 'timing.old.csv')), '')
 
+    # главная задача: последняя строка каждого ответа, вопрос не останавливает
+    r = new_project(tmp, f'{impl}-s-main')
+    write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n'
+          '- **Главная задача:** копия страницы «Каталог» с оригинала, пиксель в пиксель\n- Следующий шаг: шапка\n')
+    s9 = f'{impl}-main-{os.getpid()}'
+    tr9 = os.path.join(r, 'transcript-main.jsonl')
+    d9 = {'session_id': s9, 'cwd': r, 'transcript_path': tr9, 'scratchpad_dir': os.path.join(tmp, 'state')}
+    S('главная задача: старт называет её', 'session-start', {'source': 'startup'}, r, 'ctx', 'Главная задача (не закрыта)')
+    S('главная задача: начало хода напоминает про последнюю строку', 'turn-start',
+      dict(d9, prompt='а какой там шрифт в шапке?'), r, 'ctx', 'Параллельно выполняю главную задачу: копия')
+
+    def answer(text):
+        rec = {'type': 'assistant', 'timestamp': iso(time.time() + 2),
+               'message': {'model': 'claude-opus-5', 'content': [{'type': 'text', 'text': text}]}}
+        with open(tr9, 'w', encoding='utf-8') as fh:
+            fh.write(json.dumps(rec, ensure_ascii=False) + '\n')
+
+    answer('Шрифт в шапке — Inter 14. Какой цвет кнопки брать?')
+    S('главная задача: ответ кончился вопросом без строки — вернуть', 'check-docs', d9, r, 'block', 'Главная задача не закрыта')
+    S('главная задача: повторный Stop не зацикливается', 'check-docs', dict(d9, stop_hook_active=True), r, 'allow')
+    answer('Шрифт в шапке — Inter 14. Какой цвет кнопки брать?\n\nПараллельно выполняю главную задачу: копия страницы «Каталог».')
+    S('главная задача: строка есть — молчит', 'check-docs', d9, r, 'allow')
+    write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n- Главная задача: —\n')
+    answer('Готово.')
+    S('главная задача: закрыта — конец хода молчит', 'check-docs', d9, r, 'allow')
+    S('главная задача: закрыта — начало хода молчит', 'turn-start', dict(d9, prompt='а какой там шрифт в шапке?'), r, 'ctx')
+    if 'Параллельно' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
+
     # версия набора: отпечатки, план обновления, уведомление о новой версии
     kit = os.path.dirname(os.path.dirname(HOOKS))
     r = new_project(tmp, f'{impl}-s6')
