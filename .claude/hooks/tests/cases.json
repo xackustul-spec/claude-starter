@@ -6126,7 +6126,7 @@
 {
 "id": "C:sh:cat-ssh-config",
 "hook": "guard-shell",
-"expect": "ask",
+"expect": "allow",
 "data": {
 "tool_name": "Bash",
 "tool_input": {

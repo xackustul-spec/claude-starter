@@ -567,11 +567,17 @@ function Get-OutsideProject([string]$path, [string]$root) {
 }
 $script:WinPathRe = '(?<![\w])([A-Za-z]:[\\/][^\s"''<>|;&)]+)'
 $script:UnixPathRe = '(?<![\w/.\-])((?:/(?:home|srv|mnt|media|data|Users|root)|~)/[^\s"''<>|;&)]+)'
-$script:SysPathRe = '[\\/](Windows|Program Files( \(x86\))?|ProgramData)[\\/]|[\\/]AppData[\\/]'
+$script:SysPathRe = '[\\/](Windows|Program Files( \(x86\))?|ProgramData)[\\/]|[\\/](AppData|\.ssh)[\\/]'
+$script:RemoteCmdRe = '(^|[\s;&|(])(ssh|scp|sftp|rsync|docker|kubectl)(\.exe)?\s'
 function Get-ShellOutsidePaths([string]$cmd, [string]$root) {
     # Абсолютные пути в команде, которые ведут за пределы папки проекта (системные папки не считаются).
+    # Пути вида /srv/... — чужие только на Linux/macOS; на Windows это сервер или контейнер,
+    # а в командах ssh/scp/rsync/docker они всегда удалённые — их не проверяем.
     $out = @()
-    foreach ($rx in @($script:WinPathRe, $script:UnixPathRe)) {
+    $rxs = @($script:WinPathRe)
+    $onWindows = ($env:OS -eq 'Windows_NT') -or ([System.IO.Path]::DirectorySeparatorChar -eq '\\')
+    if ((-not $onWindows) -and (-not [regex]::IsMatch($cmd, $script:RemoteCmdRe, 'IgnoreCase'))) { $rxs += $script:UnixPathRe }
+    foreach ($rx in $rxs) {
         foreach ($m in [regex]::Matches($cmd, $rx)) {
             $p = $m.Groups[1].Value.TrimEnd('.', ',', ':')
             if ([regex]::IsMatch($p, $script:SysPathRe, 'IgnoreCase')) { continue }

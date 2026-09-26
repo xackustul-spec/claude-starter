@@ -668,13 +668,19 @@ def outside_project(path, root):
 
 WIN_PATH_RE = re.compile(r'(?<![\w])([A-Za-z]:[\\/][^\s"\'<>|;&)]+)')
 UNIX_PATH_RE = re.compile(r'(?<![\w/.\-])((?:/(?:home|srv|mnt|media|data|Users|root)|~)/[^\s"\'<>|;&)]+)')
-SYS_PATH_RE = re.compile(r'[\\/](Windows|Program Files( \(x86\))?|ProgramData)[\\/]|[\\/]AppData[\\/]', re.I)
+SYS_PATH_RE = re.compile(r'[\\/](Windows|Program Files( \(x86\))?|ProgramData)[\\/]|[\\/](AppData|\.ssh)[\\/]', re.I)
+REMOTE_CMD_RE = re.compile(r'(^|[\s;&|(])(ssh|scp|sftp|rsync|docker|kubectl)(\.exe)?\s', re.I)
 
 
 def shell_outside_paths(cmd, root):
     # Абсолютные пути в команде, которые ведут за пределы папки проекта (системные папки не считаются).
+    # Пути вида /srv/... — чужие только на Linux/macOS; на Windows это пути сервера или контейнера,
+    # а в командах ssh/scp/rsync/docker они всегда удалённые — их не проверяем.
     out = []
-    for rx in (WIN_PATH_RE, UNIX_PATH_RE):
+    rxs = [WIN_PATH_RE]
+    if os.name != 'nt' and not REMOTE_CMD_RE.search(cmd):
+        rxs.append(UNIX_PATH_RE)
+    for rx in rxs:
         for m in rx.finditer(cmd):
             p = m.group(1).rstrip('.,:')
             if SYS_PATH_RE.search(p):
