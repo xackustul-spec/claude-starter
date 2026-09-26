@@ -185,6 +185,23 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/check-python.ps1"
+            ],
+            "timeout": 30
+          }
+        ]
       }
     ],
     "Stop": [

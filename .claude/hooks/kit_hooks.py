@@ -676,9 +676,66 @@ def shell_outside_paths(cmd, root):
     return out
 
 
+ATTACHED_DOCS = ('PROFILE.md', 'STATE.md', 'LESSONS.md', 'INDEX.md')
+READ_BUDGET = 12
+READ_ONLY_SHELL_RE = re.compile(
+    r'^\s*(?:ssh\s+\S+\s+)?["\']?\s*(?:cat|head|tail|less|grep|rg|egrep|fgrep|awk|wc|ls|dir|find|tree|type|stat|file|'
+    r'Get-Content|gc|Select-String|sls|Get-ChildItem|gci|Get-Item|Test-Path|git\s+(?:log|status|diff|show|blame|ls-files|grep)|'
+    r'sed\s+-n|python3?\s+-c\s+["\']?\s*(?:print|import\s+json)|jq|xxd|od|strings|du|df)\b', re.I)
+
+
+def attached_doc_note(data):
+    # Подключённые документы уже в контексте: чтение инструментом — лишние токены; пропустить с пометкой.
+    ti = data.get('tool_input') or {}
+    path = str(ti.get('file_path') or '').replace('\\', '/')
+    if not path:
+        return
+    name = path.rsplit('/', 1)[-1]
+    if name in ATTACHED_DOCS and '/docs/ai/' in ('/' + path):
+        out_json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext":
+                  'Набор: ' + name + ' подключён к ядру и уже есть в контексте — читать его инструментом не нужно, '
+                  'если ты не правил его в этом ходе. Дальше — по тому, что уже прочитано.'}})
+
+
+def is_read_only_call(data):
+    tool = str(data.get('tool_name') or '')
+    if tool in ('Read', 'Grep', 'Glob'):
+        return True
+    if tool in ('Bash', 'PowerShell'):
+        cmd = str((data.get('tool_input') or {}).get('command') or '')
+        if not cmd.strip() or SHELL_WRITE_RE.search(cmd) or WRITE_VERB_RE.search(cmd):
+            return False
+        return bool(READ_ONLY_SHELL_RE.search(cmd))
+    return False
+
+
+def read_budget(data):
+    # После N чтений в одном ходе — сказать один раз: остальную разведку отдать субагенту.
+    if not is_read_only_call(data):
+        return
+    sf = state_file(data, 'turn')
+    try:
+        snap = json.load(open(sf, encoding='utf-8'))
+    except Exception:
+        return
+    snap['reads'] = int(snap.get('reads') or 0) + 1
+    try:
+        with open(sf, 'w', encoding='utf-8') as fh:
+            json.dump(snap, fh)
+    except Exception:
+        pass
+    if snap['reads'] == READ_BUDGET:
+        sys.stderr.write('Набор: в этом ходе уже %d чтений (файлы, поиск, команды только на чтение) — всё прочитанное '
+                         'остаётся в контексте до конца сеанса. Остальную разведку отдай субагенту с точным заданием '
+                         '(что найти, что вернуть: пути и строки), в основной контекст — только его итог (kit-context §1).\n'
+                         % READ_BUDGET)
+        sys.exit(2)
+
+
 def guard_read(data):
-    # Один процесс на Read/Glob/Grep/NotebookEdit: чужая папка — вопрос владельцу.
+    # Один процесс на Read/Glob/Grep/NotebookEdit: чужая папка — вопрос владельцу; подключённый документ — пометка.
     guard_outside(data)
+    attached_doc_note(data)
 
 
 def guard_outside(data):
@@ -1919,6 +1976,7 @@ COMMANDS = {
     'guard-shell': guard_shell, 'guard-cyrillic': guard_cyrillic, 'guard-instructions': guard_instructions,
     'rules-on-write': rules_on_write, 'check-python': check_python, 'turn-start': turn_start,
     'session-start': session_start, 'check-docs': check_docs, 'pre-write': pre_write, 'pre-read': guard_read,
+    'read-budget': read_budget,
 }
 
 if __name__ == '__main__':

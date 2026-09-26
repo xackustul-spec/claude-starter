@@ -203,6 +203,17 @@ def scenarios(impl, ps, tmp):
     if 'Указатель' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'подсказка на уведомление', 'без подсказки', out[-1][4], '')
 
+    # ---- подключённый документ читать не нужно; бюджет чтений в ходе
+    S('чтение: STATE.md — пропустить с пометкой', 'pre-read', {'tool_name': 'Read', 'tool_input': {'file_path': r + '/docs/ai/STATE.md'}}, r, 'ctx', 'уже есть в контексте')
+    S('чтение: обычный документ — молча', 'pre-read', {'tool_name': 'Read', 'tool_input': {'file_path': r + '/docs/ai/SEMANTICS.md'}}, r, 'allow')
+    sb = S('бюджет: снимок хода', 'turn-start', {'prompt': 'разберись, где считается сумма счёта'}, r, 'ctx')
+    for i in range(11):
+        S('бюджет: чтение %d — молча' % (i + 1), 'read-budget', {'session_id': sb, 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}}, r, 'allow')
+    S('бюджет: 12-е чтение — напомнить про субагента', 'read-budget', {'session_id': sb, 'tool_name': 'Bash', 'tool_input': {'command': 'grep -rn total src/'}}, r, 'block', 'субагенту')
+    S('бюджет: 13-е — уже молча', 'read-budget', {'session_id': sb, 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}}, r, 'allow')
+    S('бюджет: запись не считается', 'read-budget', {'session_id': sb, 'tool_name': 'Bash', 'tool_input': {'command': 'echo x > out.txt'}}, r, 'allow')
+    S('бюджет: без снимка хода — молча', 'read-budget', {'session_id': 'no-such-session', 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}}, r, 'allow')
+
     # ---- семейство: нулевой файл и части
     r = new_project(tmp, f'{impl}-s11')
     git(r, 'init', '-q'); git(r, 'add', '-A'); git(r, 'commit', '-qm', 'init')

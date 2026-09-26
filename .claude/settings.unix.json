@@ -143,6 +143,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/run.sh\" read-budget",
+            "timeout": 30
+          }
+        ]
       }
     ],
     "Stop": [

@@ -575,9 +575,51 @@ function Get-ShellOutsidePaths([string]$cmd, [string]$root) {
     }
     return $out
 }
+$script:AttachedDocs = @('PROFILE.md', 'STATE.md', 'LESSONS.md', 'INDEX.md')
+$script:ReadBudget = 12
+$script:ReadOnlyShellRe = '^\s*(?:ssh\s+\S+\s+)?["'']?\s*(?:cat|head|tail|less|grep|rg|egrep|fgrep|awk|wc|ls|dir|find|tree|type|stat|file|Get-Content|gc|Select-String|sls|Get-ChildItem|gci|Get-Item|Test-Path|git\s+(?:log|status|diff|show|blame|ls-files|grep)|sed\s+-n|python3?\s+-c\s+["'']?\s*(?:print|import\s+json)|jq|xxd|od|strings|du|df)\b'
+function Invoke-AttachedDocNote($data) {
+    # Подключённые документы уже в контексте: чтение инструментом — лишние токены; пропустить с пометкой.
+    $path = ([string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')) -replace '\\', '/'
+    if (-not $path) { return }
+    $name = $path.Split('/')[-1]
+    if (($script:AttachedDocs -contains $name) -and ('/' + $path).Contains('/docs/ai/')) {
+        $o = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; additionalContext = ('Набор: ' + $name + ' подключён к ядру и уже есть в контексте — читать его инструментом не нужно, если ты не правил его в этом ходе. Дальше — по тому, что уже прочитано.') } }
+        Write-Out ($o | ConvertTo-Json -Depth 5 -Compress)
+    }
+}
+function Test-ReadOnlyCall($data) {
+    $tool = [string](Get-Prop $data 'tool_name')
+    if (@('Read', 'Grep', 'Glob') -contains $tool) { return $true }
+    if (@('Bash', 'PowerShell') -contains $tool) {
+        $cmd = [string](Get-Prop (Get-Prop $data 'tool_input') 'command')
+        if ([string]::IsNullOrWhiteSpace($cmd)) { return $false }
+        if ([regex]::IsMatch($cmd, $script:ShellWriteRe, 'IgnoreCase') -or [regex]::IsMatch($cmd, $script:WriteVerbRe, 'IgnoreCase')) { return $false }
+        return [regex]::IsMatch($cmd, $script:ReadOnlyShellRe, 'IgnoreCase')
+    }
+    return $false
+}
+function Invoke-ReadBudget($data) {
+    # После N чтений в одном ходе — сказать один раз: остальную разведку отдать субагенту.
+    if (-not (Test-ReadOnlyCall $data)) { return }
+    $sf = Get-StateFile $data 'turn'
+    if (-not (Test-Path -LiteralPath $sf)) { return }
+    $snap = $null
+    try { $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json } catch { return }
+    $reads = 0; try { $reads = [int](Get-Prop $snap 'reads') } catch { $reads = 0 }
+    $reads++
+    try {
+        if ($null -eq (Get-Prop $snap 'reads')) { $snap | Add-Member -NotePropertyName reads -NotePropertyValue $reads } else { $snap.reads = $reads }
+        ($snap | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath $sf -Encoding UTF8
+    } catch {}
+    if ($reads -eq $script:ReadBudget) {
+        Out-Block @(('Набор: в этом ходе уже ' + $script:ReadBudget + ' чтений (файлы, поиск, команды только на чтение) — всё прочитанное остаётся в контексте до конца сеанса. Остальную разведку отдай субагенту с точным заданием (что найти, что вернуть: пути и строки), в основной контекст — только его итог (kit-context §1).'))
+    }
+}
 function Invoke-PreRead($data) {
-    # Один процесс на Read/Glob/Grep/NotebookEdit: чужая папка — вопрос владельцу.
+    # Один процесс на Read/Glob/Grep/NotebookEdit: чужая папка — вопрос владельцу; подключённый документ — пометка.
     Invoke-GuardOutside $data
+    Invoke-AttachedDocNote $data
 }
 function Invoke-GuardOutside($data) {
     # Каждый проект работает в своей папке: файл снаружи — вопрос владельцу, даже при полном доверии.
