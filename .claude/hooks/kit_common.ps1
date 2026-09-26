@@ -1112,6 +1112,49 @@ function Set-SessionClaim($data, [string]$root) {
     } catch {}
     return $notice
 }
+# ------------------------------------------- указатель сам подсказывает, куда идти
+$script:IndexStop = @('котор','можно','нужно','сдела','прове','посмо','почем','тоест','непон','давай','чтобы','потом','сейча','проек','докум','запис','данны','файлы','файла','папку','папка','папке','скажи','напиш','добав','убери','попра','измен','после','перед','этого','этому','вопро','ответ','работ','нужен','нужна','какой','какая','какие','когда','откуд','зачем','через','всегд','подкл','сразу','тольк','опять','снова','ничег','всего','больш','меньш','просто')
+$script:IndexAttached = @('PROFILE.md','STATE.md','LESSONS.md','INDEX.md')
+function Get-IndexStems([string]$text) {
+    $out = @()
+    foreach ($m in [regex]::Matches($text.ToLowerInvariant(), '[а-яёa-z]+')) {
+        $w = $m.Value
+        if ($w.Length -lt 5) { continue }
+        $st = $w.Substring(0, 5)
+        if (($script:IndexStop -contains $st) -or ($out -contains $st)) { continue }
+        $out += $st
+    }
+    return $out
+}
+function Get-IndexHint([string]$root, [string]$prompt) {
+    $stems = @(Get-IndexStems $prompt)
+    if ($stems.Count -eq 0) { return '' }
+    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'INDEX.md'
+    if (-not [System.IO.File]::Exists($p)) { return '' }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8).TrimStart([char]0xFEFF) } catch { return '' }
+    $best = @()
+    foreach ($line in ($txt -split "`n")) {
+        if (-not $line.StartsWith('|')) { continue }
+        $cells = @(($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() })
+        if ($cells.Count -lt 2 -or $cells[0].StartsWith('---') -or $cells[0].ToLowerInvariant().StartsWith('файл')) { continue }
+        $name = ($cells[0] -replace '`', '').Trim()
+        $skip = $false
+        foreach ($a in $script:IndexAttached) { if ($name.EndsWith($a)) { $skip = $true } }
+        if ($skip -or $name.Contains('timing')) { continue }
+        $low = $line.ToLowerInvariant()
+        $hit = @($stems | Where-Object { $low.Contains($_) })
+        if ($hit.Count -gt 0) {
+            $best += ,@($hit.Count, (-$line.Length), $name, (Get-Cut $cells[1] 70), $hit)
+        }
+    }
+    if ($best.Count -eq 0) { return '' }
+    $sorted = @($best | Sort-Object -Property @{Expression={$_[0]}; Descending=$true}, @{Expression={$_[1]}; Descending=$true})
+    $top = @($sorted | Select-Object -First 2 | Where-Object { $_[0] -ge $sorted[0][0] })
+    $docs = ($top | ForEach-Object { $_[2] + ' (' + $_[3] + ')' }) -join '; '
+    $words = (@($top[0][4] | Select-Object -First 2) | ForEach-Object { '«' + $_ + '…»' }) -join ', '
+    return ('Указатель: по словам запроса (' + $words + ') подходит ' + $docs + ' — сначала посмотреть там, и только если ответа нет, идти в код или на сервер.')
+}
 function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data
     $ts = 0
@@ -1135,6 +1178,7 @@ function Invoke-TurnStart($data) {
     if ($prompt.StartsWith('/')) { return }
     if ($other) { Write-Out $other }
     if ($hasSecret) { Write-Out $script:SecretHint }
+    if (-not $prompt.StartsWith('<')) { $ih = Get-IndexHint $root $prompt; if ($ih) { Write-Out $ih } }
     if ($isExact) { Write-Out $script:ExactHint }
     $ctxHint = Get-ContextHint $root
     if ($ctxHint) { Write-Out $ctxHint }

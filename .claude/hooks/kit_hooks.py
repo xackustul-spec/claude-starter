@@ -1284,6 +1284,61 @@ def claim_session(data, root):
     return notice
 
 
+# ------------------------------------------- указатель сам подсказывает, куда идти
+INDEX_STOP = {'котор', 'можно', 'нужно', 'сдела', 'прове', 'посмо', 'почем', 'тоест', 'непон', 'давай', 'чтобы',
+              'потом', 'сейча', 'проек', 'докум', 'запис', 'данны', 'файлы', 'файла', 'папку', 'папка', 'папке',
+              'скажи', 'напиш', 'добав', 'убери', 'попра', 'измен', 'после', 'перед', 'этого', 'этому', 'вопро',
+              'ответ', 'работ', 'нужен', 'нужна', 'какой', 'какая', 'какие', 'когда', 'откуд', 'зачем', 'через',
+              'всегд', 'подкл', 'сразу', 'тольк', 'опять', 'снова', 'ничег', 'всего', 'больш', 'меньш', 'просто'}
+INDEX_ATTACHED = ('PROFILE.md', 'STATE.md', 'LESSONS.md', 'INDEX.md')
+
+
+def index_stems(text):
+    out = []
+    for w in re.findall(r'[а-яёa-z]+', text.lower()):
+        if len(w) < 5:
+            continue
+        st = w[:5]
+        if st in INDEX_STOP or st in out:
+            continue
+        out.append(st)
+    return out
+
+
+def index_hint(root, prompt):
+    # Слова вопроса против строк INDEX.md: подходящий документ называется до первого действия,
+    # чтобы Claude шёл в документ, а не писал скрипт на сервер ради числа, которое там записано.
+    stems = index_stems(prompt)
+    if not stems:
+        return ''
+    try:
+        txt = open(os.path.join(root, 'docs', 'ai', 'INDEX.md'), encoding='utf-8-sig', errors='replace').read()
+    except Exception:
+        return ''
+    best = []
+    for line in txt.splitlines():
+        if not line.startswith('|'):
+            continue
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        if len(cells) < 2 or cells[0].startswith('---') or cells[0].lower().startswith('файл'):
+            continue
+        name = re.sub(r'`', '', cells[0]).strip()
+        if any(name.endswith(a) for a in INDEX_ATTACHED) or 'timing' in name:
+            continue
+        low = line.lower()
+        hit = [st for st in stems if st in low]
+        if hit:
+            best.append((len(hit), -len(line), name, cells[1][:70], hit))
+    if not best:
+        return ''
+    best.sort(reverse=True)
+    top = [b for b in best[:2] if b[0] >= best[0][0]]
+    docs = '; '.join('%s (%s)' % (b[2], b[3]) for b in top)
+    words = ', '.join('«%s…»' % h for h in top[0][4][:2])
+    return ('Указатель: по словам запроса (%s) подходит %s — сначала посмотреть там, и только если ответа нет, '
+            'идти в код или на сервер.\n' % (words, docs))
+
+
 def turn_start(data):
     root = project_dir(data)
     prompt_raw = str(data.get('prompt') or '')
@@ -1310,6 +1365,10 @@ def turn_start(data):
         sys.stdout.write(other)
     if has_secret:
         sys.stdout.write(SECRET_HINT)
+    if not prompt.startswith('<'):
+        ih = index_hint(root, prompt)
+        if ih:
+            sys.stdout.write(ih)
     if snap['exact']:
         sys.stdout.write(EXACT_HINT)
     ctx = context_hint(root)
