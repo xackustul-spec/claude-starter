@@ -58,6 +58,13 @@ def ask(reason):
     sys.exit(0)
 
 
+def deny(reason):
+    out_json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                     "permissionDecision": "deny",
+                                     "permissionDecisionReason": reason}})
+    sys.exit(0)
+
+
 def block(lines):
     sys.stderr.write("\n".join(lines) + "\n")
     sys.stderr.flush()
@@ -687,16 +694,24 @@ READ_ONLY_SHELL_RE = re.compile(
 
 
 def attached_doc_note(data):
-    # Подключённые документы уже в контексте: чтение инструментом — лишние токены; пропустить с пометкой.
+    # Подключённые документы уже в контексте: чтение инструментом — лишние токены. Запретить,
+    # если файл не менялся с начала хода; менялся (Claude правил его) — пропустить молча.
     ti = data.get('tool_input') or {}
     path = str(ti.get('file_path') or '').replace('\\', '/')
     if not path:
         return
     name = path.rsplit('/', 1)[-1]
-    if name in ATTACHED_DOCS and '/docs/ai/' in ('/' + path):
-        out_json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext":
-                  'Набор: ' + name + ' подключён к ядру и уже есть в контексте — читать его инструментом не нужно, '
-                  'если ты не правил его в этом ходе. Дальше — по тому, что уже прочитано.'}})
+    if name not in ATTACHED_DOCS or '/docs/ai/' not in ('/' + path):
+        return
+    try:
+        snap = json.load(open(state_file(data, 'turn'), encoding='utf-8'))
+        ts = float(snap.get('ts') or 0)
+        if ts and os.path.getmtime(path) > ts:
+            return
+    except Exception:
+        pass
+    deny('Набор: ' + name + ' подключён к ядру и уже есть в контексте — читать его инструментом не нужно, '
+         'отвечай по тому, что уже прочитано. Правил его в этом ходе — чтение разрешено автоматически.')
 
 
 def is_read_only_call(data):
@@ -711,26 +726,53 @@ def is_read_only_call(data):
     return False
 
 
+READ_BUDGET_CHARS = 60000   # ≈ 15–20 тыс. токенов вывода инструментов за один ход
+BIG_OUTPUT_CHARS = 20000    # один вывод, который стоило бы урезать
+
+
 def read_budget(data):
-    # После N чтений в одном ходе — сказать один раз: остальную разведку отдать субагенту.
-    if not is_read_only_call(data):
+    # Считает, сколько вывода инструментов осело в контексте за ход (по размеру tool_response),
+    # и число чтений. Один раз за ход, при переполнении: остальную разведку — субагенту.
+    tool = str(data.get('tool_name') or '')
+    if tool not in ('Read', 'Grep', 'Glob', 'Bash', 'PowerShell'):
         return
+    try:
+        size = len(json.dumps(data.get('tool_response') or '', ensure_ascii=False))
+    except Exception:
+        size = 0
     sf = state_file(data, 'turn')
     try:
         snap = json.load(open(sf, encoding='utf-8'))
     except Exception:
         return
-    snap['reads'] = int(snap.get('reads') or 0) + 1
+    reads = int(snap.get('reads') or 0) + (1 if is_read_only_call(data) else 0)
+    chars = int(snap.get('out_chars') or 0) + size
+    warned = bool(snap.get('budget_warned'))
+    snap['reads'], snap['out_chars'] = reads, chars
+    over = (not warned) and (reads >= READ_BUDGET or chars >= READ_BUDGET_CHARS)
+    if over:
+        snap['budget_warned'] = True
     try:
         with open(sf, 'w', encoding='utf-8') as fh:
             json.dump(snap, fh)
     except Exception:
         pass
-    if snap['reads'] == READ_BUDGET:
-        sys.stderr.write('Набор: в этом ходе уже %d чтений (файлы, поиск, команды только на чтение) — всё прочитанное '
-                         'остаётся в контексте до конца сеанса. Остальную разведку отдай субагенту с точным заданием '
-                         '(что найти, что вернуть: пути и строки), в основной контекст — только его итог (kit-context §1).\n'
-                         % READ_BUDGET)
+    if over:
+        sys.stderr.write('Набор: за этот ход в контекст уже легло около %d тыс. знаков вывода инструментов (%d чтений) — '
+                         'всё это остаётся до конца сеанса и оплачивается в каждом запросе. Остальную разведку отдай '
+                         'субагенту с точным заданием (что найти, что вернуть: пути и строки), в основной контекст — '
+                         'только его итог; большой вывод — head, диапазон или grep, не целиком (kit-context §1).\n'
+                         % (chars // 1000, reads))
+        sys.exit(2)
+    if size >= BIG_OUTPUT_CHARS and not snap.get('big_warned'):
+        snap['big_warned'] = True
+        try:
+            with open(sf, 'w', encoding='utf-8') as fh:
+                json.dump(snap, fh)
+        except Exception:
+            pass
+        sys.stderr.write('Набор: один вывод на %d тыс. знаков осел в контексте целиком. Дальше — кусок (head, '
+                         'диапазон строк, grep по нужному), а не весь файл или весь вывод.\n' % (size // 1000))
         sys.exit(2)
 
 

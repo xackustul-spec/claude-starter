@@ -47,6 +47,11 @@ function Out-Ask([string]$reason) {
     Write-Out ($o | ConvertTo-Json -Depth 5 -Compress)
     exit 0
 }
+function Out-Deny([string]$reason) {
+    $o = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; permissionDecision = 'deny'; permissionDecisionReason = $reason } }
+    Write-Out ($o | ConvertTo-Json -Depth 5 -Compress)
+    exit 0
+}
 function Out-Block([string[]]$lines) {
     Write-Err ($lines -join "`n")
     exit 2
@@ -580,14 +585,23 @@ $script:AttachedDocs = @('PROFILE.md', 'STATE.md', 'LESSONS.md', 'INDEX.md')
 $script:ReadBudget = 12
 $script:ReadOnlyShellRe = '^\s*(?:ssh\s+\S+\s+)?["'']?\s*(?:cat|head|tail|less|grep|rg|egrep|fgrep|awk|wc|ls|dir|find|tree|type|stat|file|Get-Content|gc|Select-String|sls|Get-ChildItem|gci|Get-Item|Test-Path|git\s+(?:log|status|diff|show|blame|ls-files|grep)|sed\s+-n|python3?\s+-c\s+["'']?\s*(?:print|import\s+json)|jq|xxd|od|strings|du|df)\b'
 function Invoke-AttachedDocNote($data) {
-    # Подключённые документы уже в контексте: чтение инструментом — лишние токены; пропустить с пометкой.
+    # Подключённые документы уже в контексте: запретить чтение, если файл не менялся с начала хода.
     $path = ([string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')) -replace '\\', '/'
     if (-not $path) { return }
     $name = $path.Split('/')[-1]
-    if (($script:AttachedDocs -contains $name) -and ('/' + $path).Contains('/docs/ai/')) {
-        $o = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; additionalContext = ('Набор: ' + $name + ' подключён к ядру и уже есть в контексте — читать его инструментом не нужно, если ты не правил его в этом ходе. Дальше — по тому, что уже прочитано.') } }
-        Write-Out ($o | ConvertTo-Json -Depth 5 -Compress)
-    }
+    if (-not (($script:AttachedDocs -contains $name) -and ('/' + $path).Contains('/docs/ai/'))) { return }
+    try {
+        $sf = Get-StateFile $data 'turn'
+        if (Test-Path -LiteralPath $sf) {
+            $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json
+            $ts = [double](Get-Prop $snap 'ts')
+            if ($ts -gt 0 -and (Test-Path -LiteralPath $path)) {
+                $mt = [double]([DateTimeOffset](Get-Item -LiteralPath $path).LastWriteTimeUtc).ToUnixTimeSeconds()
+                if ($mt -gt $ts) { return }
+            }
+        }
+    } catch {}
+    Out-Deny ('Набор: ' + $name + ' подключён к ядру и уже есть в контексте — читать его инструментом не нужно, отвечай по тому, что уже прочитано. Правил его в этом ходе — чтение разрешено автоматически.')
 }
 function Test-ReadOnlyCall($data) {
     $tool = [string](Get-Prop $data 'tool_name')
@@ -600,21 +614,36 @@ function Test-ReadOnlyCall($data) {
     }
     return $false
 }
+$script:ReadBudgetChars = 60000
+$script:BigOutputChars = 20000
 function Invoke-ReadBudget($data) {
-    # После N чтений в одном ходе — сказать один раз: остальную разведку отдать субагенту.
-    if (-not (Test-ReadOnlyCall $data)) { return }
+    # Объём вывода инструментов, осевший в контексте за ход, и число чтений; один раз за ход — субагенту.
+    $tool = [string](Get-Prop $data 'tool_name')
+    if (-not (@('Read', 'Grep', 'Glob', 'Bash', 'PowerShell') -contains $tool)) { return }
+    $size = 0
+    try { $resp = Get-Prop $data 'tool_response'; if ($null -ne $resp) { $size = (ConvertTo-Json -InputObject $resp -Depth 6 -Compress).Length } } catch { $size = 0 }
     $sf = Get-StateFile $data 'turn'
     if (-not (Test-Path -LiteralPath $sf)) { return }
     $snap = $null
     try { $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json } catch { return }
-    $reads = 0; try { $reads = [int](Get-Prop $snap 'reads') } catch { $reads = 0 }
-    $reads++
-    try {
-        if ($null -eq (Get-Prop $snap 'reads')) { $snap | Add-Member -NotePropertyName reads -NotePropertyValue $reads } else { $snap.reads = $reads }
-        ($snap | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath $sf -Encoding UTF8
-    } catch {}
-    if ($reads -eq $script:ReadBudget) {
-        Out-Block @(('Набор: в этом ходе уже ' + $script:ReadBudget + ' чтений (файлы, поиск, команды только на чтение) — всё прочитанное остаётся в контексте до конца сеанса. Остальную разведку отдай субагенту с точным заданием (что найти, что вернуть: пути и строки), в основной контекст — только его итог (kit-context §1).'))
+    $reads = 0; try { $reads = [int](Get-Prop $snap 'reads') } catch {}
+    $chars = 0; try { $chars = [int](Get-Prop $snap 'out_chars') } catch {}
+    $warned = [bool](Get-Prop $snap 'budget_warned'); $bigWarned = [bool](Get-Prop $snap 'big_warned')
+    if (Test-ReadOnlyCall $data) { $reads++ }
+    $chars += $size
+    $over = (-not $warned) -and (($reads -ge $script:ReadBudget) -or ($chars -ge $script:ReadBudgetChars))
+    $big = (-not $over) -and (-not $bigWarned) -and ($size -ge $script:BigOutputChars)
+    foreach ($kv in @(@('reads', $reads), @('out_chars', $chars))) {
+        if ($null -eq (Get-Prop $snap $kv[0])) { $snap | Add-Member -NotePropertyName $kv[0] -NotePropertyValue $kv[1] } else { $snap.($kv[0]) = $kv[1] }
+    }
+    if ($over) { if ($null -eq (Get-Prop $snap 'budget_warned')) { $snap | Add-Member -NotePropertyName budget_warned -NotePropertyValue $true } else { $snap.budget_warned = $true } }
+    if ($big) { if ($null -eq (Get-Prop $snap 'big_warned')) { $snap | Add-Member -NotePropertyName big_warned -NotePropertyValue $true } else { $snap.big_warned = $true } }
+    try { ($snap | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath $sf -Encoding UTF8 } catch {}
+    if ($over) {
+        Out-Block @(('Набор: за этот ход в контекст уже легло около ' + [int][math]::Floor($chars / 1000) + ' тыс. знаков вывода инструментов (' + $reads + ' чтений) — всё это остаётся до конца сеанса и оплачивается в каждом запросе. Остальную разведку отдай субагенту с точным заданием (что найти, что вернуть: пути и строки), в основной контекст — только его итог; большой вывод — head, диапазон или grep, не целиком (kit-context §1).'))
+    }
+    if ($big) {
+        Out-Block @(('Набор: один вывод на ' + [int][math]::Floor($size / 1000) + ' тыс. знаков осел в контексте целиком. Дальше — кусок (head, диапазон строк, grep по нужному), а не весь файл или весь вывод.'))
     }
 }
 function Invoke-PreRead($data) {

@@ -93,7 +93,7 @@ def call(impl, ps, cmd, data, root, env=None, args=None):
     elif r.returncode != 0:
         kind = 'error'
     elif '"permissionDecision"' in out:
-        kind = 'ask'
+        kind = 'deny' if '"deny"' in out else 'ask'
     elif out:
         kind = 'ctx'
     else:
@@ -204,15 +204,26 @@ def scenarios(impl, ps, tmp):
         out[-1] = (out[-1][0], False, 'подсказка на уведомление', 'без подсказки', out[-1][4], '')
 
     # ---- подключённый документ читать не нужно; бюджет чтений в ходе
-    S('чтение: STATE.md — пропустить с пометкой', 'pre-read', {'tool_name': 'Read', 'tool_input': {'file_path': r + '/docs/ai/STATE.md'}}, r, 'ctx', 'уже есть в контексте')
-    S('чтение: обычный документ — молча', 'pre-read', {'tool_name': 'Read', 'tool_input': {'file_path': r + '/docs/ai/SEMANTICS.md'}}, r, 'allow')
+    write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n')
     sb = S('бюджет: снимок хода', 'turn-start', {'prompt': 'разберись, где считается сумма счёта'}, r, 'ctx')
+    time.sleep(1.1)
+    S('чтение: STATE.md не менялся в ходе — запрет', 'pre-read', {'session_id': sb, 'tool_name': 'Read', 'tool_input': {'file_path': r + '/docs/ai/STATE.md'}}, r, 'deny', 'уже есть в контексте')
+    write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n- Правка в этом ходе\n')
+    S('чтение: STATE.md правили в ходе — можно', 'pre-read', {'session_id': sb, 'tool_name': 'Read', 'tool_input': {'file_path': r + '/docs/ai/STATE.md'}}, r, 'allow')
+    S('чтение: обычный документ — молча', 'pre-read', {'tool_name': 'Read', 'tool_input': {'file_path': r + '/docs/ai/SEMANTICS.md'}}, r, 'allow')
+    small = {'stdout': 'ok', 'stderr': ''}
     for i in range(11):
-        S('бюджет: чтение %d — молча' % (i + 1), 'read-budget', {'session_id': sb, 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}}, r, 'allow')
-    S('бюджет: 12-е чтение — напомнить про субагента', 'read-budget', {'session_id': sb, 'tool_name': 'Bash', 'tool_input': {'command': 'grep -rn total src/'}}, r, 'block', 'субагенту')
-    S('бюджет: 13-е — уже молча', 'read-budget', {'session_id': sb, 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}}, r, 'allow')
-    S('бюджет: запись не считается', 'read-budget', {'session_id': sb, 'tool_name': 'Bash', 'tool_input': {'command': 'echo x > out.txt'}}, r, 'allow')
-    S('бюджет: без снимка хода — молча', 'read-budget', {'session_id': 'no-such-session', 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}}, r, 'allow')
+        S('бюджет: чтение %d — молча' % (i + 1), 'read-budget', {'session_id': sb, 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}, 'tool_response': small}, r, 'allow')
+    S('бюджет: 12-е чтение — напомнить про субагента', 'read-budget', {'session_id': sb, 'tool_name': 'Bash', 'tool_input': {'command': 'grep -rn total src/'}, 'tool_response': small}, r, 'block', 'субагенту')
+    S('бюджет: 13-е — уже молча', 'read-budget', {'session_id': sb, 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}, 'tool_response': small}, r, 'allow')
+    S('бюджет: запись не считается', 'read-budget', {'session_id': sb, 'tool_name': 'Bash', 'tool_input': {'command': 'echo x > out.txt'}, 'tool_response': small}, r, 'allow')
+    S('бюджет: без снимка хода — молча', 'read-budget', {'session_id': 'no-such-session', 'tool_name': 'Read', 'tool_input': {'file_path': r + '/README.md'}, 'tool_response': small}, r, 'allow')
+    sb2 = S('бюджет по объёму: снимок хода', 'turn-start', {'prompt': 'посмотри, что отдаёт сервер по этому адресу'}, r, 'ctx')
+    big = {'stdout': 'x' * 25000, 'stderr': ''}
+    S('бюджет по объёму: один большой вывод — предупредить', 'read-budget', {'session_id': sb2, 'tool_name': 'Bash', 'tool_input': {'command': 'bash read_menu.sh'}, 'tool_response': big}, r, 'block', 'целиком')
+    S('бюджет по объёму: второй большой — про большой уже молчит', 'read-budget', {'session_id': sb2, 'tool_name': 'Bash', 'tool_input': {'command': 'bash read_menu2.sh'}, 'tool_response': big}, r, 'allow')
+    S('бюджет по объёму: 60 тыс. знаков набралось — субагенту', 'read-budget', {'session_id': sb2, 'tool_name': 'Bash', 'tool_input': {'command': 'ssh srv bash /tmp/probe.sh'}, 'tool_response': big}, r, 'block', 'субагенту')
+    S('бюджет по объёму: дальше молчит', 'read-budget', {'session_id': sb2, 'tool_name': 'Bash', 'tool_input': {'command': 'ssh srv bash /tmp/probe2.sh'}, 'tool_response': big}, r, 'allow')
 
     # ---- семейство: нулевой файл и части
     r = new_project(tmp, f'{impl}-s11')
