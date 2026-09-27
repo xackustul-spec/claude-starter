@@ -189,6 +189,7 @@ def guard_shell(data):
     cmd = str((data.get('tool_input') or {}).get('command') or '')
     if not cmd.strip():
         return
+    guard_status_shell(cmd, data)
     if SSH_RE.search(cmd):
         bad = []
         if '<<' in cmd:
@@ -816,6 +817,7 @@ def guard_docs_on_update(data):
 def pre_write(data):
     # Один процесс на Write/Edit: обновление набора → чужая папка → кириллица → инструкции → правила.
     guard_docs_on_update(data)
+    guard_status_write(data)
     guard_outside(data)
     guard_cyrillic(data)
     guard_instructions(data)
@@ -1447,8 +1449,7 @@ def index_hint(root, prompt):
 
 
 # ------------------------------------------- «доделывай» без предмета: брать пункты по порядку, не стоять
-VAGUE_RE = re.compile(r'^\W*(доделывай|доделай|продолжай|продолжи|дальше|давай дальше|остальное|делай|работай|'
-                      r'ну что|ты закончил|закончил\??|всё готово\??|все готово\??|остальное сделано\??)\W*$', re.I)
+VAGUE_RE = re.compile(r'^\W*(доделывай|доделай|продолжай|продолжи|дальше|давай дальше|остальное|делай|работай|ну что)\W*$', re.I)
 VAGUE_HINT = ('Набор: владелец не назвал предмет. Взять пункты из «Следующий шаг» в STATE.md по порядку: каждый — '
               'сделать, проверить, закоммитить, одна строка отчёта — и следующий, пока не кончатся или владелец не '
               'вмешается. Что ждёт владельца — записать в «Ждёт владельца» и пропустить, не стоять. Вопрос, на который '
@@ -1554,12 +1555,163 @@ def main_task_check(data, root, since):
             % (task, MAIN_TASK_TAIL)]
 
 
+# ------------------------------------------- вопрос о готовности: только ответ, правок в этом ходе нет
+STATUS_RE = re.compile(r'(готов[аоы]?\s*\?|всё готово|все готово|что осталось|сколько осталось|как долго|долго (ещё|еще)|'
+                       r'когда (будет|закончишь|сделаешь|всё|все)|завершен[оа]?\s*\?|закончен[оа]?\s*\?|сделан[оа]?\s*\?|'
+                       r'ты закончил|закончил\s*\?|как идёт|как идет|что по (копии|задаче|срокам))', re.I)
+STATUS_WORK_RE = re.compile(r'\b(сделай|доделай|делай|продолжай|запускай|исправь|почини|переделай|добавь|убери|верни)\b', re.I)
+STATUS_HINT = ('Набор: владелец спрашивает о готовности. В этом ходе — только ответ, по таблице готовности '
+               '(часть · сделано · проверено · сверил владелец): да/нет, что осталось списком, сколько это займёт. '
+               'Таблицы нет — составить её сейчас в документе главной задачи и ответить по ней. Правки файлов, '
+               'команды на сервер и коммиты в этом ходе запрещены (хук не пропустит); работа — следующим ходом, '
+               'после его слова.\n')
+
+
+def is_status_question(prompt):
+    p = prompt.strip()
+    return bool(p) and len(p) <= 160 and bool(STATUS_RE.search(p)) and not STATUS_WORK_RE.search(p)
+
+
+def turn_snap(data):
+    try:
+        return json.load(open(state_file(data, 'turn'), encoding='utf-8'))
+    except Exception:
+        return {}
+
+
+STATUS_DENY = ('Ход начался с вопроса владельца о готовности — в нём только ответ по таблице готовности, без правок '
+               'и команд, которые что-то меняют. Ответь сейчас; работу — следующим ходом, когда он скажет.')
+CHANGE_CMD_RE = re.compile(r'(^|[\s;&|("\'])(scp|rsync|patch|tee|sed\s+-i|git\s+(commit|push|apply)|docker\s+(compose\s+)?'
+                            r'(build|up|restart)|npm\s+run\s+build|cp|mv|Set-Content|Out-File|Add-Content)\b|>\s*(?!&|/dev/null)\S', re.I)
+
+
+def guard_status_write(data):
+    if turn_snap(data).get('ready_q'):
+        deny(STATUS_DENY)
+
+
+def guard_status_shell(cmd, data):
+    if turn_snap(data).get('ready_q') and CHANGE_CMD_RE.search(cmd):
+        deny(STATUS_DENY)
+
+
+# ------------------------------------------- проверяющий интерфейса: менялись экраны — ui-checker обязан сходить
+UI_FILE_RE = re.compile(r'[\w./\\-]+\.(tsx|jsx|vue|svelte|css|scss|less|html?)\b', re.I)
+UI_SKIP_RE = re.compile(r'(^|/)(docs/ai/previews|node_modules|dist|build|\.next)/', re.I)
+
+
+def ui_changes(uses):
+    # Что из интерфейса трогали в этом ходе: путь Write/Edit, файл в команде с записью, или скрипт-заплатка
+    # (Write .py/.sh/.ps1, в теле которого имена файлов интерфейса). Возвращает имена файлов и был ли проверяющий.
+    files, checked = [], False
+    for name, inp, ts in uses.values():
+        inp = inp if isinstance(inp, dict) else {}
+        if name == 'Agent':
+            blob = json.dumps(inp, ensure_ascii=False)
+            if re.search(r'ui-checker|проверяющ', blob, re.I):
+                checked = True
+            continue
+        if name in ('Write', 'Edit', 'MultiEdit', 'NotebookEdit'):
+            path = str(inp.get('file_path') or inp.get('notebook_path') or '').replace('\\', '/')
+            if UI_FILE_RE.search(path) and not UI_SKIP_RE.search(path):
+                files.append(os.path.basename(path))
+            elif name == 'Write' and re.search(r'\.(py|sh|ps1|js|mjs)$', path, re.I):
+                for m in UI_FILE_RE.finditer(str(inp.get('content') or '')):
+                    if not UI_SKIP_RE.search(m.group(0)):
+                        files.append(os.path.basename(m.group(0).replace('\\', '/')))
+        elif name in ('Bash', 'PowerShell'):
+            cmd = str(inp.get('command') or '')
+            if CHANGE_CMD_RE.search(cmd) or re.search(r'\bpython\S*\s+\S*(patch|fix|apply)', cmd, re.I):
+                for m in UI_FILE_RE.finditer(cmd):
+                    if not UI_SKIP_RE.search(m.group(0)):
+                        files.append(os.path.basename(m.group(0).replace('\\', '/')))
+    seen, out = set(), []
+    for f in files:
+        if f.lower() not in seen:
+            seen.add(f.lower())
+            out.append(f)
+    return out, checked
+
+
+def ui_check_msgs(data, root, since):
+    if data.get('stop_hook_active') is True:
+        return []
+    if not os.path.isfile(os.path.join(root, '.claude', 'agents', 'ui-checker.md')):
+        return []
+    uses, _, _ = turn_tools(str(data.get('transcript_path') or ''), since)
+    files, checked = ui_changes(uses)
+    if not files or checked:
+        return []
+    return ['Менялись файлы интерфейса (%s), а проверяющий ui-checker не ходил. Отправь его сейчас субагентом '
+            '(Agent, ui-checker): сверить экран с эталоном в браузере, итог одной строкой; расхождение — переделать; '
+            'браузера нет — сказать владельцу первой строкой.' % ', '.join(files[:4])]
+
+
+# ------------------------------------------- «Следующий шаг»: первый пункт — один
+def next_step_problem(root):
+    try:
+        txt = open(os.path.join(root, 'docs', 'ai', 'STATE.md'), encoding='utf-8-sig', errors='replace').read()
+    except Exception:
+        return ''
+    nums = re.findall(r'^\s*(\d+)[а-яa-z]?[.)]\s*\S', state_section(txt, 'Следующий шаг'), re.M)
+    firsts = [n for n in nums if int(n) <= 1]
+    if len(firsts) < 2:
+        return ''
+    return ('В «Следующий шаг» %d пункт(а) претендуют на первое место (0, 0а, 0б, 1…): оставить один первый, '
+            'остальные пронумеровать ниже по порядку — иначе очередь без вершины.' % len(firsts))
+
+
+# ------------------------------------------- уроки с повторами: раз в сеанс не выпускать без предложения проверки
+def stuck_lessons(root, min_reps):
+    p = os.path.join(root, 'docs', 'ai', 'LESSONS.md')
+    try:
+        txt = open(p, encoding='utf-8-sig', errors='replace').read()
+    except Exception:
+        return []
+    stuck = []
+    for line in txt.splitlines():
+        if not line.startswith('|'):
+            continue
+        cells = [c.strip() for c in line.strip().strip('|').split('|')]
+        if len(cells) < 5 or cells[0].startswith('---') or cells[0].lower().startswith('дата'):
+            continue
+        status = cells[3].lower()
+        m = re.search(r'\d+', cells[4])
+        reps = int(m.group(0)) if m else 0
+        if reps < min_reps or 'закрыт' in status:
+            continue
+        if re.search(r'хук|тест|линтер|rules/|\.md\b|правил', line, re.I):
+            continue
+        stuck.append((reps, cells[1][:60]))
+    return stuck
+
+
+def lessons_block_msgs(data, root):
+    if data.get('stop_hook_active') is True:
+        return []
+    stuck = [x for x in stuck_lessons(root, 3)]
+    if not stuck:
+        return []
+    marker = state_file(data, 'lessons')
+    if os.path.isfile(marker):
+        return []
+    try:
+        open(marker, 'w').write('1')
+    except Exception:
+        pass
+    stuck.sort(reverse=True)
+    return ['Урок «%s» повторился %d раз(а), а проверки для него нет. В этом ответе предложи владельцу хук или тест '
+            'одной фразой (что проверять и где) — или впиши в строку урока, чем он уже закрыт. Один раз за сеанс.'
+            % (stuck[0][1], stuck[0][0])]
+
+
 def turn_start(data):
     root = project_dir(data)
     prompt_raw = str(data.get('prompt') or '')
     has_secret = bool(PASTED_SECRET_RE.search(prompt_raw))
     snap = {'ts': time.time(), 'head': None, 'status': {},
             'exact': bool(EXACT_RE.search(prompt_raw)),
+            'ready_q': is_status_question(prompt_raw),
             'prompt': mask_secrets(re.sub(r'\s+', ' ', prompt_raw).strip())[:140]}
     head = git(root, 'rev-parse', 'HEAD')
     if head is not None:
@@ -1584,7 +1736,9 @@ def turn_start(data):
         ih = index_hint(root, prompt)
         if ih:
             sys.stdout.write(ih)
-    if VAGUE_RE.search(prompt):
+    if snap['ready_q']:
+        sys.stdout.write(STATUS_HINT)
+    elif VAGUE_RE.search(prompt):
         sys.stdout.write(VAGUE_HINT)
     if snap['exact']:
         sys.stdout.write(EXACT_HINT)
@@ -1610,7 +1764,8 @@ def check_docs(data):
         snap = json.load(open(state_file(data, 'turn'), encoding='utf-8'))
     except Exception:
         snap = None
-    task_msgs = main_task_check(data, root, float((snap or {}).get('ts') or 0) - 1.0)
+    since = float((snap or {}).get('ts') or 0) - 1.0
+    task_msgs = main_task_check(data, root, since) + ui_check_msgs(data, root, since) + lessons_block_msgs(data, root)
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
         if task_msgs:
@@ -1663,6 +1818,10 @@ def check_docs(data):
                           'один короткий вопрос. Сверил, лишнего нет — заканчивай ответ, владельцу про эту '
                           'проверку не писать.')
     doc_msgs = task_msgs + exact_msgs + doc_problems(root, top, touched - deleted)
+    if any(re.search(r'(^|/)docs/ai/STATE\.md$', f) for f in touched - deleted):
+        nsp = next_step_problem(root)
+        if nsp:
+            doc_msgs.append(nsp)
     if not code:
         if doc_msgs:
             block(['Перед завершением: ' + ' '.join(doc_msgs)])
@@ -1925,6 +2084,9 @@ def session_start(data):
     if task:
         lines.append('Главная задача (не закрыта): «%s» — вести её параллельно всему; последняя строка каждого '
                      'ответа: «%s: …».' % (task, MAIN_TASK_TAIL))
+    note = next_step_problem(root)
+    if note:
+        lines.append(note)
     note = interface_notice(root)
     if note:
         lines.append(note)
@@ -1936,26 +2098,7 @@ def session_start(data):
 def lessons_notice(root):
     # Урок повторился 2 раза и больше, статус не «закрыт», в строке нет ссылки на хук/тест/правило —
     # лестница «кандидат → активен → хук» застряла; сказать одной строкой, что предложить владельцу.
-    p = os.path.join(root, 'docs', 'ai', 'LESSONS.md')
-    try:
-        txt = open(p, encoding='utf-8-sig', errors='replace').read()
-    except Exception:
-        return ''
-    stuck = []
-    for line in txt.splitlines():
-        if not line.startswith('|'):
-            continue
-        cells = [c.strip() for c in line.strip().strip('|').split('|')]
-        if len(cells) < 5 or cells[0].startswith('---') or cells[0].lower().startswith('дата'):
-            continue
-        status = cells[3].lower()
-        m = re.search(r'\d+', cells[4])
-        reps = int(m.group(0)) if m else 0
-        if reps < 2 or 'закрыт' in status:
-            continue
-        if re.search(r'хук|тест|линтер|rules/|\.md\b|правил', line, re.I):
-            continue
-        stuck.append(cells[1][:60])
+    stuck = [t for r, t in stuck_lessons(root, 2)]
     if not stuck:
         return ''
     return ('Уроки: %d повторились 2 раза и больше, а проверки (хук, тест, правило) для них нет — «%s». '

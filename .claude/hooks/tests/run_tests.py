@@ -188,7 +188,7 @@ def scenarios(impl, ps, tmp):
 
     # ---- «доделывай» без предмета; «Ждёт владельца» не повод стоять
     S('расплывчато: «доделывай» — брать пункты по порядку', 'turn-start', {'prompt': 'Доделывай'}, r, 'ctx', 'по порядку')
-    S('расплывчато: «остальное сделано?»', 'turn-start', {'prompt': 'остальное сделано?'}, r, 'ctx', 'по порядку')
+    S('готовность: «остальное сделано?» — только ответ', 'turn-start', {'prompt': 'остальное сделано?'}, r, 'ctx', 'о готовности')
     S('расплывчато: предмет назван — молчит', 'turn-start', {'prompt': 'доделай фильтр тегов в полосе фильтров'}, r, 'ctx')
     if 'по порядку' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
@@ -513,6 +513,59 @@ def scenarios(impl, ps, tmp):
     S('главная задача: закрыта — начало хода молчит', 'turn-start', dict(d9, prompt='а какой там шрифт в шапке?'), r, 'ctx')
     if 'Параллельно' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
+
+    # вопрос о готовности: ответ без правок; правки в этом ходе не проходят
+    r = new_project(tmp, f'{impl}-s-ready')
+    s10 = f'{impl}-ready-{os.getpid()}'
+    d10 = {'session_id': s10, 'cwd': r, 'scratchpad_dir': os.path.join(tmp, 'state')}
+    S('готовность: «копия готова?» — подсказка', 'turn-start', dict(d10, prompt='полная копия topvisor.com готова?'), r, 'ctx', 'о готовности')
+    S('готовность: Write в этом ходе — отказ', 'pre-write',
+      dict(d10, tool_name='Write', tool_input={'file_path': r + '/src/x.py', 'content': 'x'}), r, 'deny', 'о готовности')
+    S('готовность: scp в этом ходе — отказ', 'guard-shell', dict(d10, tool_input={'command': 'scp patch.py host:/tmp/'}), r, 'deny', 'о готовности')
+    S('готовность: git status — можно', 'guard-shell', dict(d10, tool_input={'command': 'git status'}), r, 'allow')
+    S('готовность: «сделай копию» — не вопрос', 'turn-start', dict(d10, prompt='сделай копию готовой к показу'), r, 'ctx')
+    if 'о готовности' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
+    S('готовность: следующий ход — Write снова можно', 'pre-write',
+      dict(d10, tool_name='Write', tool_input={'file_path': r + '/src/x.py', 'content': 'x'}), r, 'ctx', 'Правила проекта')
+
+    # проверяющий интерфейса: экраны менялись — ui-checker обязан сходить
+    tr10 = os.path.join(r, 'transcript-ui.jsonl')
+    d10t = dict(d10, transcript_path=tr10)
+
+    def turn_with(recs):
+        with open(tr10, 'w', encoding='utf-8') as fh:
+            fh.write('\n'.join(json.dumps(x, ensure_ascii=False) for x in recs) + '\n')
+
+    def tu(name, inp):
+        return {'type': 'assistant', 'timestamp': iso(time.time() + 2),
+                'message': {'model': 'claude-opus-5', 'content': [{'type': 'tool_use', 'id': 'u' + str(len(inp)), 'name': name, 'input': inp}]}}
+
+    S('интерфейс: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
+    turn_with([tu('Write', {'file_path': r + '/patch_map.py', 'content': 'p = "app/rivals-map.tsx"\nopen(p).write("x")'}),
+               tu('Bash', {'command': 'scp patch_map.py host:/tmp/'})])
+    S('интерфейс: заплатка на .tsx без проверяющего — вернуть', 'check-docs', d10t, r, 'block', 'ui-checker не ходил')
+    S('интерфейс: повторный Stop не зацикливается', 'check-docs', dict(d10t, stop_hook_active=True), r, 'allow')
+    turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}),
+               tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'})])
+    S('интерфейс: проверяющий ходил — молчит', 'check-docs', d10t, r, 'allow')
+    turn_with([tu('Bash', {'command': 'ssh host cat app/rivals-map.tsx'})])
+    S('интерфейс: только чтение .tsx — молчит', 'check-docs', d10t, r, 'allow')
+
+    # «Следующий шаг»: первый пункт — один
+    write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n\n## Следующий шаг\n0а. Доделать всё\n0б. Разбор проверяющего\n0. Копия экранов\n1. Директ\n2. Telegram\n')
+    S('очередь: четыре первых пункта — сказать при старте', 'session-start', {'source': 'startup'}, r, 'ctx', 'претендуют на первое место')
+    write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n\n## Следующий шаг\n1. Копия экранов\n2. Директ\n')
+    S('очередь: один первый — молчит', 'session-start', {'source': 'startup'}, r, 'ctx')
+    if 'первое место' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
+
+    # уроки с повторами: раз в сеанс не выпускать без предложения проверки
+    write(r, 'docs/ai/LESSONS.md', '## Уроки\n| Дата | Что случилось → как правильно | Область | Статус | Повторов |\n|---|---|---|---|---|\n'
+          '| 01.09.2026 | Кириллица в именах ломала сборку → только латиница | общий | активен | 5 |\n')
+    turn_with([])
+    S('уроки: 5 повторов без проверки — вернуть раз за сеанс', 'check-docs', d10t, r, 'block', 'повторился 5')
+    S('уроки: второй раз в том же сеансе — молчит', 'check-docs', d10t, r, 'allow')
 
     # версия набора: отпечатки, план обновления, уведомление о новой версии
     kit = os.path.dirname(os.path.dirname(HOOKS))

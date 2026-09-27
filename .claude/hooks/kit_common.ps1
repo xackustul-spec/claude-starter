@@ -157,6 +157,7 @@ function Get-ShellWriteTarget([string]$cmd) {
 function Invoke-GuardShell($data) {
     $cmd = [string](Get-Prop (Get-Prop $data 'tool_input') 'command')
     if ([string]::IsNullOrWhiteSpace($cmd)) { return }
+    Invoke-GuardStatusShell $cmd $data
     if ($cmd -match $script:SshRe) {
         $bad = @()
         if ($cmd.Contains('<<')) { $bad += 'heredoc (<<)' }
@@ -687,6 +688,7 @@ function Invoke-GuardDocsOnUpdate($data) {
 function Invoke-PreWrite($data) {
     # Один процесс на Write/Edit: обновление набора → чужая папка → кириллица → инструкции → правила.
     Invoke-GuardDocsOnUpdate $data
+    Invoke-GuardStatusWrite $data
     Invoke-GuardOutside $data
     Invoke-GuardCyrillic $data
     Invoke-GuardInstructions $data
@@ -1234,7 +1236,7 @@ function Get-IndexHint([string]$root, [string]$prompt) {
     return ('Указатель: по словам запроса (' + $words + ') подходит ' + $docs + ' — сначала посмотреть там, и только если ответа нет, идти в код или на сервер.')
 }
 # ------------------------------------------- «доделывай» без предмета: брать пункты по порядку, не стоять
-$script:VagueRe = '^\W*(доделывай|доделай|продолжай|продолжи|дальше|давай дальше|остальное|делай|работай|ну что|ты закончил|закончил\??|всё готово\??|все готово\??|остальное сделано\??)\W*$'
+$script:VagueRe = '^\W*(доделывай|доделай|продолжай|продолжи|дальше|давай дальше|остальное|делай|работай|ну что)\W*$'
 $script:VagueHint = 'Набор: владелец не назвал предмет. Взять пункты из «Следующий шаг» в STATE.md по порядку: каждый — сделать, проверить, закоммитить, одна строка отчёта — и следующий, пока не кончатся или владелец не вмешается. Что ждёт владельца — записать в «Ждёт владельца» и пропустить, не стоять. Вопрос, на который ответит эталон, код, сервер или интернет, — задать им, не владельцу.'
 function Get-StateSection([string]$txt, [string]$title) {
     $m = [regex]::Match($txt, '(?ms)^## ' + [regex]::Escape($title) + '[^\n]*\n(.*?)(?=^## |\z)')
@@ -1321,6 +1323,119 @@ function Get-MainTaskCheck($data, [string]$root, [double]$since) {
     if ($tail.ToLowerInvariant().Contains($script:MainTaskTail.ToLowerInvariant())) { return @() }
     return @('Главная задача не закрыта: «' + $task + '», а последней строки «' + $script:MainTaskTail + ': …» в ответе нет. Допиши её последней строкой и, если ход закончился вопросом или побочным ответом, продолжи главную задачу в этом же ходе, не дожидаясь владельца; закончена и принята владельцем — поставь в STATE.md «Главная задача: —».')
 }
+# ------------------------------------------- вопрос о готовности: только ответ, правок в этом ходе нет
+$script:StatusRe = '(готов[аоы]?\s*\?|всё готово|все готово|что осталось|сколько осталось|как долго|долго (ещё|еще)|когда (будет|закончишь|сделаешь|всё|все)|завершен[оа]?\s*\?|закончен[оа]?\s*\?|сделан[оа]?\s*\?|ты закончил|закончил\s*\?|как идёт|как идет|что по (копии|задаче|срокам))'
+$script:StatusWorkRe = '\b(сделай|доделай|делай|продолжай|запускай|исправь|почини|переделай|добавь|убери|верни)\b'
+$script:StatusHint = 'Набор: владелец спрашивает о готовности. В этом ходе — только ответ, по таблице готовности (часть · сделано · проверено · сверил владелец): да/нет, что осталось списком, сколько это займёт. Таблицы нет — составить её сейчас в документе главной задачи и ответить по ней. Правки файлов, команды на сервер и коммиты в этом ходе запрещены (хук не пропустит); работа — следующим ходом, после его слова.'
+$script:StatusDeny = 'Ход начался с вопроса владельца о готовности — в нём только ответ по таблице готовности, без правок и команд, которые что-то меняют. Ответь сейчас; работу — следующим ходом, когда он скажет.'
+$script:ChangeCmdRe = '(^|[\s;&|("''])(scp|rsync|patch|tee|sed\s+-i|git\s+(commit|push|apply)|docker\s+(compose\s+)?(build|up|restart)|npm\s+run\s+build|cp|mv|Set-Content|Out-File|Add-Content)\b|>\s*(?!&|/dev/null)\S'
+function Test-StatusQuestion([string]$prompt) {
+    $p = $prompt.Trim()
+    if (-not $p -or $p.Length -gt 160) { return $false }
+    if (-not [regex]::IsMatch($p, $script:StatusRe, 'IgnoreCase')) { return $false }
+    if ([regex]::IsMatch($p, $script:StatusWorkRe, 'IgnoreCase')) { return $false }
+    return $true
+}
+function Get-TurnSnap($data) {
+    try { $sf = Get-StateFile $data 'turn'; if (Test-Path -LiteralPath $sf) { return ((Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json) } } catch {}
+    return $null
+}
+function Invoke-GuardStatusWrite($data) {
+    $snap = Get-TurnSnap $data
+    if ($snap -and (Get-Prop $snap 'ready_q') -eq $true) { Out-Deny $script:StatusDeny }
+}
+function Invoke-GuardStatusShell([string]$cmd, $data) {
+    $snap = Get-TurnSnap $data
+    if ($snap -and (Get-Prop $snap 'ready_q') -eq $true -and [regex]::IsMatch($cmd, $script:ChangeCmdRe, 'IgnoreCase')) { Out-Deny $script:StatusDeny }
+}
+# ------------------------------------------- проверяющий интерфейса: менялись экраны — ui-checker обязан сходить
+$script:UiFileRe = '[\w./\\-]+\.(tsx|jsx|vue|svelte|css|scss|less|html?)\b'
+$script:UiSkipRe = '(^|/)(docs/ai/previews|node_modules|dist|build|\.next)/'
+function Get-UiChanges($uses) {
+    $files = New-Object System.Collections.Generic.List[string]
+    $checked = $false
+    foreach ($u in @($uses)) {
+        if ($null -eq $u) { continue }
+        $name = [string]$u.Name; $inp = $u.Input
+        if ($name -eq 'Agent') {
+            $blob = ''; try { $blob = ($inp | ConvertTo-Json -Depth 6 -Compress) } catch { $blob = [string]$inp }
+            if ([regex]::IsMatch($blob, 'ui-checker|проверяющ', 'IgnoreCase')) { $checked = $true }
+            continue
+        }
+        if ($name -in @('Write', 'Edit', 'MultiEdit', 'NotebookEdit')) {
+            $path = [string](Get-Prop $inp 'file_path'); if (-not $path) { $path = [string](Get-Prop $inp 'notebook_path') }
+            $path = $path -replace '\\', '/'
+            if ([regex]::IsMatch($path, $script:UiFileRe, 'IgnoreCase') -and -not [regex]::IsMatch($path, $script:UiSkipRe, 'IgnoreCase')) {
+                $files.Add([System.IO.Path]::GetFileName($path))
+            } elseif ($name -eq 'Write' -and [regex]::IsMatch($path, '\.(py|sh|ps1|js|mjs)$', 'IgnoreCase')) {
+                foreach ($m in [regex]::Matches([string](Get-Prop $inp 'content'), $script:UiFileRe, 'IgnoreCase')) {
+                    if (-not [regex]::IsMatch($m.Value, $script:UiSkipRe, 'IgnoreCase')) { $files.Add([System.IO.Path]::GetFileName(($m.Value -replace '\\', '/'))) }
+                }
+            }
+        } elseif ($name -in @('Bash', 'PowerShell')) {
+            $cmd = [string](Get-Prop $inp 'command')
+            if ([regex]::IsMatch($cmd, $script:ChangeCmdRe, 'IgnoreCase') -or [regex]::IsMatch($cmd, '\bpython\S*\s+\S*(patch|fix|apply)', 'IgnoreCase')) {
+                foreach ($m in [regex]::Matches($cmd, $script:UiFileRe, 'IgnoreCase')) {
+                    if (-not [regex]::IsMatch($m.Value, $script:UiSkipRe, 'IgnoreCase')) { $files.Add([System.IO.Path]::GetFileName(($m.Value -replace '\\', '/'))) }
+                }
+            }
+        }
+    }
+    $seen = @{}; $out = @()
+    foreach ($f in $files) { $k = $f.ToLowerInvariant(); if (-not $seen.ContainsKey($k)) { $seen[$k] = 1; $out += $f } }
+    return @{ files = @($out); checked = $checked }
+}
+function Get-UiCheckMsgs($data, [string]$root, [double]$since) {
+    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return @() }
+    if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path $root '.claude') 'agents') 'ui-checker.md'))) { return @() }
+    $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) $since
+    $ch = Get-UiChanges $tt.uses
+    if ($ch.files.Count -eq 0 -or $ch.checked) { return @() }
+    return @('Менялись файлы интерфейса (' + (($ch.files | Select-Object -First 4) -join ', ') + '), а проверяющий ui-checker не ходил. Отправь его сейчас субагентом (Agent, ui-checker): сверить экран с эталоном в браузере, итог одной строкой; расхождение — переделать; браузера нет — сказать владельцу первой строкой.')
+}
+# ------------------------------------------- «Следующий шаг»: первый пункт — один
+function Get-NextStepProblem([string]$root) {
+    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
+    if (-not [System.IO.File]::Exists($p)) { return '' }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8).TrimStart([char]0xFEFF) } catch { return '' }
+    $firsts = 0
+    foreach ($m in [regex]::Matches((Get-StateSection $txt 'Следующий шаг'), '(?m)^\s*(\d+)[а-яa-z]?[.)]\s*\S')) {
+        if ([int]$m.Groups[1].Value -le 1) { $firsts++ }
+    }
+    if ($firsts -lt 2) { return '' }
+    return ('В «Следующий шаг» ' + $firsts + ' пункт(а) претендуют на первое место (0, 0а, 0б, 1…): оставить один первый, остальные пронумеровать ниже по порядку — иначе очередь без вершины.')
+}
+# ------------------------------------------- уроки с повторами: раз в сеанс не выпускать без предложения проверки
+function Get-StuckLessons([string]$root, [int]$minReps) {
+    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'LESSONS.md'
+    if (-not [System.IO.File]::Exists($p)) { return @() }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8).TrimStart([char]0xFEFF) } catch { return @() }
+    $stuck = @()
+    foreach ($line in ($txt -split "`n")) {
+        if (-not $line.StartsWith('|')) { continue }
+        $cells = @(($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() })
+        if ($cells.Count -lt 5 -or $cells[0].StartsWith('---') -or $cells[0].ToLowerInvariant().StartsWith('дата')) { continue }
+        $status = $cells[3].ToLowerInvariant()
+        $m = [regex]::Match($cells[4], '\d+')
+        $reps = 0; if ($m.Success) { $reps = [int]$m.Value }
+        if ($reps -lt $minReps -or $status.Contains('закрыт')) { continue }
+        if ([regex]::IsMatch($line, 'хук|тест|линтер|rules/|\.md\b|правил', 'IgnoreCase')) { continue }
+        $stuck += [pscustomobject]@{ Reps = $reps; Text = (Get-Cut $cells[1] 60) }
+    }
+    return @($stuck)
+}
+function Get-LessonsBlockMsgs($data, [string]$root) {
+    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return @() }
+    $stuck = @(Get-StuckLessons $root 3)
+    if ($stuck.Count -eq 0) { return @() }
+    $marker = Get-StateFile $data 'lessons'
+    if (Test-Path -LiteralPath $marker) { return @() }
+    try { Set-Content -LiteralPath $marker -Value '1' -Encoding UTF8 } catch {}
+    $top = ($stuck | Sort-Object -Property Reps -Descending | Select-Object -First 1)
+    return @('Урок «' + $top.Text + '» повторился ' + $top.Reps + ' раз(а), а проверки для него нет. В этом ответе предложи владельцу хук или тест одной фразой (что проверять и где) — или впиши в строку урока, чем он уже закрыт. Один раз за сеанс.')
+}
 function Invoke-TurnStart($data) {
     $root = Get-ProjectDir $data
     $ts = 0
@@ -1330,7 +1445,8 @@ function Invoke-TurnStart($data) {
     $hasSecret = [regex]::IsMatch($promptRaw, $script:PastedSecretRe, 'IgnoreCase')
     # Регистр не важен: «Дословно», «Не просил» с заглавной — те же слова (в Python re.I).
     $isExact = [regex]::IsMatch($promptRaw, $script:ExactRe, 'IgnoreCase')
-    $snap = @{ ts = $ts; head = $null; status = @{}; exact = $isExact; prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
+    $isStatus = Test-StatusQuestion $promptRaw
+    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; exact = $isExact; prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -1345,7 +1461,8 @@ function Invoke-TurnStart($data) {
     if ($other) { Write-Out $other }
     if ($hasSecret) { Write-Out $script:SecretHint }
     if (-not $prompt.StartsWith('<')) { $ih = Get-IndexHint $root $prompt; if ($ih) { Write-Out $ih } }
-    if ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
+    if ($isStatus) { Write-Out $script:StatusHint }
+    elseif ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
     if ($isExact) { Write-Out $script:ExactHint }
     $ctxHint = Get-ContextHint $root
     if ($ctxHint) { Write-Out $ctxHint }
@@ -1469,7 +1586,7 @@ function Invoke-CheckDocs($data) {
     try { $sf = Get-StateFile $data 'turn'; if (Test-Path -LiteralPath $sf) { $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json } } catch { $snap = $null }
     $since = -1.0
     if ($snap) { try { $since = [double](Get-Prop $snap 'ts') - 1.0 } catch { $since = -1.0 } }
-    $taskMsgs = @(Get-MainTaskCheck $data $root $since)
+    $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root)
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {
         if ($taskMsgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($taskMsgs -join ' ')) }
@@ -1514,6 +1631,10 @@ function Invoke-CheckDocs($data) {
         $exactMsgs += 'Владелец требовал сделать дословно. Прежде чем заканчивать: сверь по пунктам его словами, что просили и что сделано; всё, добавленное сверх просьбы (оформление, значок, рамка, пунктир, колонка, подсказка, блок, поле), удали сейчас; непонятное — один короткий вопрос. Сверил, лишнего нет — заканчивай ответ, владельцу про эту проверку не писать.'
     }
     $docMsgs = @($taskMsgs) + @($exactMsgs) + @(Get-DocProblems $root $top $alive)
+    if (@($alive | Where-Object { $_ -match '(^|/)docs/ai/STATE\.md$' }).Count -gt 0) {
+        $nsp = Get-NextStepProblem $root
+        if ($nsp) { $docMsgs += $nsp }
+    }
     if ($code.Count -eq 0) {
         if ($docMsgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($docMsgs -join ' ')) }
         return
@@ -1738,24 +1859,10 @@ function Invoke-Scan([string[]]$paths) {
 }
 # ------------------------------------------- уроки, которые повторяются, а проверки нет
 function Get-LessonsNotice([string]$root) {
-    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'LESSONS.md'
-    if (-not [System.IO.File]::Exists($p)) { return '' }
-    $txt = ''
-    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8).TrimStart([char]0xFEFF) } catch { return '' }
-    $stuck = @()
-    foreach ($line in ($txt -split "`n")) {
-        if (-not $line.StartsWith('|')) { continue }
-        $cells = @(($line.Trim().Trim('|') -split '\|') | ForEach-Object { $_.Trim() })
-        if ($cells.Count -lt 5 -or $cells[0].StartsWith('---') -or $cells[0].ToLowerInvariant().StartsWith('дата')) { continue }
-        $status = $cells[3].ToLowerInvariant()
-        $m = [regex]::Match($cells[4], '\d+')
-        $reps = 0; if ($m.Success) { $reps = [int]$m.Value }
-        if ($reps -lt 2 -or $status.Contains('закрыт')) { continue }
-        if ([regex]::IsMatch($line, 'хук|тест|линтер|rules/|\.md\b|правил', 'IgnoreCase')) { continue }
-        $stuck += (Get-Cut $cells[1] 60)
-    }
+    $stuck = @(Get-StuckLessons $root 2)
     if ($stuck.Count -eq 0) { return '' }
-    return ('Уроки: ' + $stuck.Count + ' повторились 2 раза и больше, а проверки (хук, тест, правило) для них нет — «' + (($stuck | Select-Object -First 2) -join '»; «') + '». Предложить владельцу закрепить проверкой (project-memory, «уроки»).')
+    $texts = @($stuck | ForEach-Object { $_.Text })
+    return ('Уроки: ' + $stuck.Count + ' повторились 2 раза и больше, а проверки (хук, тест, правило) для них нет — «' + (($texts | Select-Object -First 2) -join '»; «') + '». Предложить владельцу закрепить проверкой (project-memory, «уроки»).')
 }
 function Get-InterfaceNotice([string]$root) {
     $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'PROFILE.md'
@@ -1820,6 +1927,8 @@ function Invoke-SessionStart($data) {
     if ($note) { $lines += $note }
     $task = Get-MainTask $root
     if ($task) { $lines += ('Главная задача (не закрыта): «' + $task + '» — вести её параллельно всему; последняя строка каждого ответа: «' + $script:MainTaskTail + ': …».') }
+    $note = Get-NextStepProblem $root
+    if ($note) { $lines += $note }
     $note = Get-InterfaceNotice $root
     if ($note) { $lines += $note }
     $lines += 'Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.'
