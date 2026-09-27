@@ -1314,7 +1314,7 @@ function Get-MainTaskHint([string]$root) {
 }
 function Get-MainTaskCheck($data, [string]$root, [double]$since) {
     # Конец хода: главная задача есть, а последняя строка ответа не про неё — вернуть и продолжить.
-    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return @() }
+    # Повторный проход тоже проверяется — до двух возвратов за ход (см. Invoke-CheckDocs).
     $task = Get-MainTask $root
     if (-not $task) { return @() }
     $ans = Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since
@@ -1386,7 +1386,6 @@ function Get-UiChanges($uses) {
     return @{ files = @($out); checked = $checked }
 }
 function Get-UiCheckMsgs($data, [string]$root, [double]$since) {
-    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return @() }
     if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path $root '.claude') 'agents') 'ui-checker.md'))) { return @() }
     $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) $since
     $ch = Get-UiChanges $tt.uses
@@ -1579,6 +1578,18 @@ function Set-StateStamp([string]$root, [string]$top) {
         [System.IO.File]::WriteAllBytes($p, $bytes)
     } catch {}
 }
+function Out-StopBlock($data, $snap, [string[]]$lines, [bool]$again = $false) {
+    # Возврат ответа на доработку. Первый проход возвращает всегда; повторный (stop_hook_active) —
+    # один раз за ход, чтобы не зациклиться: итого не больше двух возвратов на ход.
+    if (-not $again) { Out-Block $lines }
+    $p = Get-StateFile $data 'stop'
+    $st = $null
+    try { if (Test-Path -LiteralPath $p) { $st = (Get-Content -LiteralPath $p -Raw -Encoding UTF8) | ConvertFrom-Json } } catch { $st = $null }
+    $ts = $null; if ($snap) { $ts = Get-Prop $snap 'ts' }
+    if ($st -and ([string](Get-Prop $st 'ts') -eq [string]$ts) -and ([int](Get-Prop $st 'n') -ge 1)) { return }
+    try { (@{ ts = $ts; n = 1 } | ConvertTo-Json -Compress) | Set-Content -LiteralPath $p -Encoding UTF8 } catch {}
+    Out-Block $lines
+}
 function Invoke-CheckDocs($data) {
     $root = Get-ProjectDir $data
     Write-Timing $data $root
@@ -1586,10 +1597,12 @@ function Invoke-CheckDocs($data) {
     try { $sf = Get-StateFile $data 'turn'; if (Test-Path -LiteralPath $sf) { $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json } } catch { $snap = $null }
     $since = -1.0
     if ($snap) { try { $since = [double](Get-Prop $snap 'ts') - 1.0 } catch { $since = -1.0 } }
-    $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root)
+    $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
+    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-LessonsBlockMsgs $data $root) }
+    $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {
-        if ($taskMsgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($taskMsgs -join ' ')) }
+        if ($taskMsgs.Count -gt 0) { $pre = 'Перед завершением: '; if ($again) { $pre = 'Повторно, перед завершением: ' }; Out-StopBlock $data $snap @($pre + ($taskMsgs -join ' ')) $again }
         return
     }
     $head = $head.Trim()
@@ -1617,7 +1630,10 @@ function Invoke-CheckDocs($data) {
     foreach ($f in @($touched)) { if ($f -match '(^|/)docs/ai/timing(\.old)?\.csv$|(^|/)\.claude/session\.lock$') { [void]$touched.Remove($f) } }
     # Штамп — до любой блокировки и при повторном проходе тоже (см. kit_hooks.py).
     if ($touched.Count -gt 0) { Set-StateStamp $root $top }
-    if ((Get-Prop $data 'stop_hook_active') -eq $true) { return }
+    if ($again) {
+        if ($taskMsgs.Count -gt 0) { Out-StopBlock $data $snap @('Повторно, перед завершением: ' + ($taskMsgs -join ' ')) $true }
+        return
+    }
     $code = @(); $docs = $false
     foreach ($f in (Sort-Ordinal @($touched))) {
         if ($now.ContainsKey($f) -and $now[$f][0].Contains('D')) { continue }
@@ -1636,7 +1652,7 @@ function Invoke-CheckDocs($data) {
         if ($nsp) { $docMsgs += $nsp }
     }
     if ($code.Count -eq 0) {
-        if ($docMsgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($docMsgs -join ' ')) }
+        if ($docMsgs.Count -gt 0) { Out-StopBlock $data $snap @('Перед завершением: ' + ($docMsgs -join ' ')) }
         return
     }
     $noHeader = @()
@@ -1653,7 +1669,7 @@ function Invoke-CheckDocs($data) {
     if ($noHeader.Count -gt 0) {
         $msgs += ("Нет строки 'Назначение:' в начале файлов: " + (($noHeader | Select-Object -First 10) -join ', ') + '. Добавь шапку (правило .claude/rules/code-headers.md).')
     }
-    if ($msgs.Count -gt 0) { Out-Block @('Перед завершением: ' + ($msgs -join ' ')) }
+    if ($msgs.Count -gt 0) { Out-StopBlock $data $snap @('Перед завершением: ' + ($msgs -join ' ')) }
 }
 
 # ------------------------------------------------------------- session-start

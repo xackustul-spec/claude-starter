@@ -504,7 +504,8 @@ def scenarios(impl, ps, tmp):
 
     answer('Шрифт в шапке — Inter 14. Какой цвет кнопки брать?')
     S('главная задача: ответ кончился вопросом без строки — вернуть', 'check-docs', d9, r, 'block', 'Главная задача не закрыта')
-    S('главная задача: повторный Stop не зацикливается', 'check-docs', dict(d9, stop_hook_active=True), r, 'allow')
+    S('главная задача: повторный Stop — строки всё нет, второй возврат', 'check-docs', dict(d9, stop_hook_active=True), r, 'block', 'Повторно')
+    S('главная задача: третий проход — не зацикливается', 'check-docs', dict(d9, stop_hook_active=True), r, 'allow')
     answer('Шрифт в шапке — Inter 14. Какой цвет кнопки брать?\n\nПараллельно выполняю главную задачу: копия страницы «Каталог».')
     S('главная задача: строка есть — молчит', 'check-docs', d9, r, 'allow')
     write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n- Главная задача: —\n')
@@ -545,7 +546,8 @@ def scenarios(impl, ps, tmp):
     turn_with([tu('Write', {'file_path': r + '/patch_map.py', 'content': 'p = "app/rivals-map.tsx"\nopen(p).write("x")'}),
                tu('Bash', {'command': 'scp patch_map.py host:/tmp/'})])
     S('интерфейс: заплатка на .tsx без проверяющего — вернуть', 'check-docs', d10t, r, 'block', 'ui-checker не ходил')
-    S('интерфейс: повторный Stop не зацикливается', 'check-docs', dict(d10t, stop_hook_active=True), r, 'allow')
+    S('интерфейс: повторный Stop — проверяющего всё нет, второй возврат', 'check-docs', dict(d10t, stop_hook_active=True), r, 'block', 'Повторно')
+    S('интерфейс: третий проход — не зацикливается', 'check-docs', dict(d10t, stop_hook_active=True), r, 'allow')
     turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}),
                tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'})])
     S('интерфейс: проверяющий ходил — молчит', 'check-docs', d10t, r, 'allow')

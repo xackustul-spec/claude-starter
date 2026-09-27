@@ -1541,8 +1541,7 @@ def main_task_hint(root):
 
 def main_task_check(data, root, since):
     # Конец хода: главная задача есть, а последняя строка ответа не про неё — вернуть и продолжить.
-    if data.get('stop_hook_active') is True:
-        return []
+    # Повторный проход (stop_hook_active) тоже проверяется — до двух возвратов за ход (см. check_docs).
     task = main_task(root)
     if not task:
         return []
@@ -1634,8 +1633,6 @@ def ui_changes(uses):
 
 
 def ui_check_msgs(data, root, since):
-    if data.get('stop_hook_active') is True:
-        return []
     if not os.path.isfile(os.path.join(root, '.claude', 'agents', 'ui-checker.md')):
         return []
     uses, _, _ = turn_tools(str(data.get('transcript_path') or ''), since)
@@ -1757,6 +1754,26 @@ def turn_start(data):
                      '(если владелец не задал форму ответа). Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.\n')
 
 
+def stop_block(data, snap, lines, again=False):
+    # Возврат ответа на доработку. Первый проход возвращает всегда; повторный (stop_hook_active) —
+    # один раз за ход, чтобы не зациклиться: итого не больше двух возвратов на ход.
+    if not again:
+        block(lines)
+    p = state_file(data, 'stop')
+    try:
+        st = json.load(open(p, encoding='utf-8'))
+    except Exception:
+        st = {}
+    ts = (snap or {}).get('ts')
+    if st.get('ts') == ts and int(st.get('n') or 0) >= 1:
+        return
+    try:
+        json.dump({'ts': ts, 'n': 1}, open(p, 'w', encoding='utf-8'))
+    except Exception:
+        pass
+    block(lines)
+
+
 def check_docs(data):
     root = project_dir(data)
     write_timing(data, root)
@@ -1765,11 +1782,13 @@ def check_docs(data):
     except Exception:
         snap = None
     since = float((snap or {}).get('ts') or 0) - 1.0
-    task_msgs = main_task_check(data, root, since) + ui_check_msgs(data, root, since) + lessons_block_msgs(data, root)
+    again = data.get('stop_hook_active') is True
+    # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
+    task_msgs = main_task_check(data, root, since) + ui_check_msgs(data, root, since) + ([] if again else lessons_block_msgs(data, root))
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
         if task_msgs:
-            block(['Перед завершением: ' + ' '.join(task_msgs)])
+            stop_block(data, snap, [('Повторно, перед завершением: ' if again else 'Перед завершением: ') + ' '.join(task_msgs)], again)
         return
     top = (git(root, 'rev-parse', '--show-toplevel') or root).strip() or root
     head = head.strip()
@@ -1798,7 +1817,9 @@ def check_docs(data):
     # когда хук что-то заметил, и head в STATE отставал на десятки коммитов.
     if touched:
         stamp_state(root, top)
-    if data.get('stop_hook_active') is True:
+    if again:
+        if task_msgs:
+            stop_block(data, snap, ['Повторно, перед завершением: ' + ' '.join(task_msgs)], True)
         return
     code, docs = [], False
     for f in sorted(touched):
@@ -1824,7 +1845,7 @@ def check_docs(data):
             doc_msgs.append(nsp)
     if not code:
         if doc_msgs:
-            block(['Перед завершением: ' + ' '.join(doc_msgs)])
+            stop_block(data, snap, ['Перед завершением: ' + ' '.join(doc_msgs)])
         return
     no_header = []
     for f in code:
@@ -1847,7 +1868,7 @@ def check_docs(data):
         msgs.append("Нет строки 'Назначение:' в начале файлов: " + ', '.join(no_header[:10]) +
                     '. Добавь шапку (правило .claude/rules/code-headers.md).')
     if msgs:
-        block(['Перед завершением: ' + ' '.join(msgs)])
+        stop_block(data, snap, ['Перед завершением: ' + ' '.join(msgs)])
 
 
 # Лимиты строк: подключённые всегда документы — жёстче, остальные — 300.
