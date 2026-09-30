@@ -1257,6 +1257,7 @@ function Get-WaitingNotice([string]$root) {
 }
 # ------------------------------------------- главная задача: последняя строка ответа, вопрос не останавливает
 $script:MainTaskTail = 'Параллельно выполняю главную задачу'
+$script:MainTaskWait = 'Жду вашего решения по главной задаче'
 $script:MainTaskEmptyRe = '^(—|-|–|нет|пусто|TODO.*|\(.*\))?$'
 function Get-MainTask([string]$root) {
     # «Главная задача:» в «Сейчас» STATE.md — ТЗ владельца; живёт там, пока он не сказал «готово».
@@ -1310,7 +1311,7 @@ function Get-LastAnswer([string]$path, [double]$since) {
 function Get-MainTaskHint([string]$root) {
     $task = Get-MainTask $root
     if (-not $task) { return '' }
-    return ('Главная задача: «' + $task + '». Последняя строка ответа — «' + $script:MainTaskTail + ': ' + $task + '». Вопрос владельцу или побочный ответ работу не останавливает: спросил (ответил) — и в том же ходе продолжил главную задачу.')
+    return ('Главная задача: «' + $task + '». Последняя строка ответа — одна из двух: идёт работа → «' + $script:MainTaskTail + ': ' + $task + ', сейчас <что делаю>»; сделано и нужен владелец → «' + $script:MainTaskWait + ' <какой>: <что именно сделать — посмотреть экран / да-нет / дать данные> и где (адрес)». Слово «выполняю» без действия в этом ходе запрещено. Вопрос владельцу или побочный ответ работу не останавливает: спросил (ответил) — и в том же ходе продолжил.')
 }
 function Get-MainTaskCheck($data, [string]$root, [double]$since) {
     # Конец хода: главная задача есть, а последняя строка ответа не про неё — вернуть и продолжить.
@@ -1320,8 +1321,9 @@ function Get-MainTaskCheck($data, [string]$root, [double]$since) {
     $ans = Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since
     if (-not $ans) { return @() }
     $tail = $ans.Trim(); if ($tail.Length -gt 400) { $tail = $tail.Substring($tail.Length - 400) }
-    if ($tail.ToLowerInvariant().Contains($script:MainTaskTail.ToLowerInvariant())) { return @() }
-    return @('Главная задача не закрыта: «' + $task + '», а последней строки «' + $script:MainTaskTail + ': …» в ответе нет. Допиши её последней строкой и, если ход закончился вопросом или побочным ответом, продолжи главную задачу в этом же ходе, не дожидаясь владельца; закончена и принята владельцем — поставь в STATE.md «Главная задача: —».')
+    $low = $tail.ToLowerInvariant()
+    if ($low.Contains($script:MainTaskTail.ToLowerInvariant()) -or $low.Contains($script:MainTaskWait.ToLowerInvariant())) { return @() }
+    return @('Главная задача не закрыта: «' + $task + '», а последней строки про неё в ответе нет. Допиши последней строкой «' + $script:MainTaskTail + ': …, сейчас <что делаю>» — и продолжи её в этом же ходе, не дожидаясь владельца; либо, если сделано и без него не двинуться, «' + $script:MainTaskWait + ' <какой>: <что сделать и где>»; принята владельцем — в STATE.md «Главная задача: —».')
 }
 # ------------------------------------------- вопрос о готовности: только ответ, правок в этом ходе нет
 $script:StatusRe = '(готов[аоы]?\s*\?|всё готово|все готово|что осталось|сколько осталось|как долго|долго (ещё|еще)|когда (будет|закончишь|сделаешь|всё|все)|завершен[оа]?\s*\?|закончен[оа]?\s*\?|сделан[оа]?\s*\?|ты закончил|закончил\s*\?|как идёт|как идет|что по (копии|задаче|срокам))'
@@ -1942,7 +1944,7 @@ function Invoke-SessionStart($data) {
     $note = Get-WaitingNotice $root
     if ($note) { $lines += $note }
     $task = Get-MainTask $root
-    if ($task) { $lines += ('Главная задача (не закрыта): «' + $task + '» — вести её параллельно всему; последняя строка каждого ответа: «' + $script:MainTaskTail + ': …».') }
+    if ($task) { $lines += ('Главная задача (не закрыта): «' + $task + '» — вести её параллельно всему; последняя строка каждого ответа: «' + $script:MainTaskTail + ': …, сейчас …» или «' + $script:MainTaskWait + ' …: что нужно и где».') }
     $note = Get-NextStepProblem $root
     if ($note) { $lines += $note }
     $note = Get-InterfaceNotice $root
