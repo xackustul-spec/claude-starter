@@ -38,12 +38,31 @@ DOC_EXT = {'.md', '.txt', '.rst', '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.pp
 I18N_PATH = re.compile(r'(^|/)(locales?|i18n|lang|langs|translations?|messages|l10n)/|(^|/|\.)(ru|en|uk|be|kk|uz|ky|tg|hy|ka|az|de|fr|es|it|pt|pl|cs|tr|zh|ja|ko|ar|he)([-_][A-Za-z]{2,4})?\.(json|ya?ml)$', re.I)
 
 
+_DATA = {}
+
+
 def read_input():
+    global _DATA
     try:
         raw = sys.stdin.buffer.read().decode('utf-8-sig', 'replace')
-        return json.loads(raw) if raw.strip() else {}
+        _DATA = json.loads(raw) if raw.strip() else {}
     except Exception:
-        return {}
+        _DATA = {}
+    return _DATA
+
+
+# «Спросить» — не окно разрешения (оно висит часами, когда владельца нет рядом), а отказ с просьбой
+# спросить словами и закончить ход. Короткое «да» владельца следующим сообщением открывает тот же вызов.
+CHAT_ASK_SUFFIX = (' Окно разрешения не открывать: спроси владельца словами одной строкой — что именно и зачем — и '
+                   'закончи ход. Его «да» следующим сообщением откроет этот вызов.')
+OK_RE = re.compile(r'^\W*(да|ок|окей|ok|давай|делай|разрешаю|можно|подтверждаю|согласен|yes|go|продолжай|выполняй)\W*$', re.I)
+
+
+def turn_ok():
+    try:
+        return bool(json.load(open(state_file(_DATA, 'turn'), encoding='utf-8')).get('ok'))
+    except Exception:
+        return False
 
 
 def out_json(obj):
@@ -52,9 +71,11 @@ def out_json(obj):
 
 
 def ask(reason):
+    if turn_ok():
+        return  # владелец только что сказал «да» — вызов разрешён на этот ход
     out_json({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                     "permissionDecision": "ask",
-                                     "permissionDecisionReason": reason}})
+                                     "permissionDecision": "deny",
+                                     "permissionDecisionReason": reason + CHAT_ASK_SUFFIX}})
     sys.exit(0)
 
 
@@ -120,6 +141,10 @@ def git(root, *args):
 PRE = r'(^|[\s;|&(\'"`])'
 GITF = r'git\s+(?:(?:-[cC]\s+\S+|--[\w-]+(?:=\S*)?|-[a-zA-Z])\s+)*'  # git с глобальными флагами: git -C x, git --no-pager
 SSH_RE = re.compile(r'(^|[\s;|&(])ssh(\.exe)?\s', re.I)
+# Команды, которые ждут клавиатуру: в Claude Code ввода нет, вызов висит, пока не истечёт время.
+INTERACTIVE_RE = re.compile(r'(^|[;|&(]\s*|^\s*(sudo\s+)?)(vim?|nvim|nano|less|more|top|htop|Read-Host|pause|git\s+commit(?![^|;&]*(-m|-F|--message|--file))\b|'
+                            r'git\s+rebase\s+-i|npm\s+init(?![^|;&]*-y)|npx\s+create-[\w-]+(?![^|;&]*(-y|--yes))|'
+                            r'ssh(\.exe)?\s+(-\S+\s+)*[\w.@-]+\s*($|[;|&)])|python3?\s*($|[;|&)])|node\s*($|[;|&)])|psql(?![^|;&]*(-c|-f|<))\b)', re.I)
 INSTALL_RE = re.compile(
     PRE + r'(npm|pnpm|yarn|bun)\s+(i|install|add|ci|create|exec|dlx|x|update|upgrade|up)\b'
     r'|' + PRE + r'yarn\s*($|[;&|])'
@@ -238,6 +263,11 @@ def guard_shell(data):
     if DANGER_RE.search(cmd):
         ask('Опасное действие (данные, база, удаление, история git, инфраструктура). '
             'Перед выполнением: бэкап и «да» владельца.')
+    m = INTERACTIVE_RE.search(cmd)
+    if m:
+        deny('Команда ждёт ввода с клавиатуры (' + m.group(0).strip() + ') — в Claude Code некому его дать, '
+             'ход повиснет на минуты и часы. Переписать без ожидания: ключ «без вопросов» (-y, --yes, -m, '
+             'BatchMode), вывод в файл вместо пейджера, редактор не открывать — править Write/Edit.')
 
 
 # ------------------------------------------------------------- guard-cyrillic
@@ -1220,6 +1250,7 @@ def timing_row(data, snap, root):
             if out and out not in outside:
                 outside.append(out)
     tool_s = min(tool_s, total)
+    note_slow_call(data, uses, results)
     top = ' '.join('%s*%d' % (n, c) for n, c in sorted(names.items(), key=lambda kv: (-kv[1], kv[0]))[:6])
     return ';'.join([time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(start)),
                      '%.1f' % total, '%.1f' % tool_s, '%.1f' % (total - tool_s), str(calls),
@@ -1229,6 +1260,41 @@ def timing_row(data, snap, root):
                      str(len(outside)),
                      csv_cell(top), csv_cell(' '.join(targets[:12]))[:180],
                      csv_cell(snap.get('prompt'))[:140]])
+
+
+SLOW_CALL_S = 600
+
+
+def note_slow_call(data, uses, results):
+    # Один вызов инструмента ждал дольше SLOW_CALL_S — запомнить, чтобы начало следующего хода сказало об этом.
+    worst = None
+    for tid, (name, inp, ts) in uses.items():
+        end = results.get(tid)
+        if end is None or end < ts:
+            continue
+        if end - ts >= SLOW_CALL_S and (worst is None or end - ts > worst[0]):
+            worst = (end - ts, name, tool_target(inp) or '')
+    if not worst:
+        return
+    try:
+        json.dump({'s': int(worst[0]), 'name': worst[1], 'target': worst[2][:80]},
+                  open(state_file(data, 'slow'), 'w', encoding='utf-8'), ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def slow_call_hint(data):
+    p = state_file(data, 'slow')
+    try:
+        st = json.load(open(p, encoding='utf-8'))
+        os.remove(p)
+    except Exception:
+        return ''
+    return ('В прошлом ходе один вызов %s (%s) ждал %d мин. Так не бывает у команды, которая работает: это запрос '
+            'разрешения без владельца рядом, ожидание ввода или скрипт без конца. Дальше: долгое — только с timeout '
+            'и в фоне с логом (проверять выводом, не ждать); разрешение нужно — спросить владельца словами до запуска; '
+            'ввод нужен — ключ «без вопросов». Что это было и чем заменено — одной строкой в ответе.\n'
+            % (st.get('name'), st.get('target') or '…', int(st.get('s', 0)) // 60))
 
 
 def timing_path(root):
@@ -1754,6 +1820,7 @@ def turn_start(data):
     snap = {'ts': time.time(), 'head': None, 'status': {},
             'exact': bool(EXACT_RE.search(prompt_raw)),
             'ready_q': is_status_question(prompt_raw),
+            'ok': bool(OK_RE.match(prompt_raw.strip())) and len(prompt_raw.strip()) <= 24,
             'prompt': mask_secrets(re.sub(r'\s+', ' ', prompt_raw).strip())[:140]}
     head = git(root, 'rev-parse', 'HEAD')
     if head is not None:
@@ -1793,6 +1860,9 @@ def turn_start(data):
     mt = main_task_hint(root)
     if mt:
         sys.stdout.write(mt)
+    sh = slow_call_hint(data)
+    if sh:
+        sys.stdout.write(sh)
     if len(prompt) < 12:
         return
     sys.stdout.write('Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог» '

@@ -4,6 +4,7 @@ param([string]$CasesFile, [string]$OutFile, [string]$Root)
 . (Join-Path (Split-Path -Parent $PSScriptRoot) 'kit_common.ps1')
 function Out-Block([string[]]$lines) { throw ("BLOCK`n" + ($lines -join "`n")) }
 function Out-Ask([string]$reason) { throw ("ASK`n" + $reason) }
+function Out-Deny([string]$reason) { throw ("DENY`n" + $reason) }
 $cases = [System.IO.File]::ReadAllText($CasesFile, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
 $results = New-Object System.Collections.Generic.List[object]
 foreach ($c in $cases) {
@@ -21,6 +22,7 @@ foreach ($c in $cases) {
         $m = [string]$_.Exception.Message
         if ($m.StartsWith('BLOCK')) { $verdict = 'block'; $msg = $m.Substring(6) }
         elseif ($m.StartsWith('ASK')) { $verdict = 'ask'; $msg = $m.Substring(4) }
+        elseif ($m.StartsWith('DENY')) { $verdict = 'deny'; $msg = $m.Substring(5) }
         else { $verdict = 'error'; $msg = $m }
     }
     $results.Add([pscustomobject]@{ id = $c.id; verdict = $verdict; msg = $msg })

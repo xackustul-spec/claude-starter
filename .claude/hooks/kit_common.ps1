@@ -33,8 +33,20 @@ function Read-HookInput {
         $reader = New-Object System.IO.StreamReader -ArgumentList ([Console]::OpenStandardInput()), $script:Utf8
         $raw = $reader.ReadToEnd().TrimStart([char]0xFEFF)
         if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
-        return ($raw | ConvertFrom-Json)
+        $script:Data = ($raw | ConvertFrom-Json)
+        return $script:Data
     } catch { return $null }
+}
+# «Спросить» — не окно разрешения (оно висит часами без владельца), а отказ с просьбой спросить словами.
+$script:ChatAskSuffix = ' Окно разрешения не открывать: спроси владельца словами одной строкой — что именно и зачем — и закончи ход. Его «да» следующим сообщением откроет этот вызов.'
+$script:OkRe = '^\W*(да|ок|окей|ok|давай|делай|разрешаю|можно|подтверждаю|согласен|yes|go|продолжай|выполняй)\W*$'
+function Test-TurnOk {
+    try {
+        $sf = Get-StateFile $script:Data 'turn'
+        if (-not (Test-Path -LiteralPath $sf)) { return $false }
+        $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json
+        return ((Get-Prop $snap 'ok') -eq $true)
+    } catch { return $false }
 }
 function Get-Prop($obj, $name) {
     if ($null -eq $obj) { return $null }
@@ -43,7 +55,8 @@ function Get-Prop($obj, $name) {
     return $p.Value
 }
 function Out-Ask([string]$reason) {
-    $o = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; permissionDecision = 'ask'; permissionDecisionReason = $reason } }
+    if (Test-TurnOk) { return }
+    $o = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; permissionDecision = 'deny'; permissionDecisionReason = ($reason + $script:ChatAskSuffix) } }
     Write-Out ($o | ConvertTo-Json -Depth 5 -Compress)
     exit 0
 }
@@ -100,6 +113,7 @@ function Get-FileExt([string]$leaf) {
 # Pre — начало команды: добавлены кавычки и обратные кавычки (bash -c "...", eval "...", `...`)
 $script:Pre = '(^|[\s;|&(''"`])'
 $script:GitF = 'git\s+(?:(?:-[cC]\s+\S+|--[\w-]+(?:=\S*)?|-[a-zA-Z])\s+)*'
+$script:InteractiveRe = '(^|[;|&(]\s*|^\s*(sudo\s+)?)(vim?|nvim|nano|less|more|top|htop|Read-Host|pause|git\s+commit(?![^|;&]*(-m|-F|--message|--file))\b|git\s+rebase\s+-i|npm\s+init(?![^|;&]*-y)|npx\s+create-[\w-]+(?![^|;&]*(-y|--yes))|ssh(\.exe)?\s+(-\S+\s+)*[\w.@-]+\s*($|[;|&)])|python3?\s*($|[;|&)])|node\s*($|[;|&)])|psql(?![^|;&]*(-c|-f|<))\b)'
 $script:SshRe = '(^|[\s;|&(])ssh(\.exe)?\s'
 $script:InstallRe = $script:Pre + '(npm|pnpm|yarn|bun)\s+(i|install|add|ci|create|exec|dlx|x|update|upgrade|up)\b' +
     '|' + $script:Pre + 'yarn\s*($|[;&|])' +
@@ -200,6 +214,10 @@ function Invoke-GuardShell($data) {
     }
     if ($cmd -match $script:DangerRe) {
         Out-Ask 'Опасное действие (данные, база, удаление, история git, инфраструктура). Перед выполнением: бэкап и «да» владельца.'
+    }
+    $mi = [regex]::Match($cmd, $script:InteractiveRe, 'IgnoreCase')
+    if ($mi.Success) {
+        Out-Deny ('Команда ждёт ввода с клавиатуры (' + $mi.Value.Trim() + ') — в Claude Code некому его дать, ход повиснет на минуты и часы. Переписать без ожидания: ключ «без вопросов» (-y, --yes, -m, BatchMode), вывод в файл вместо пейджера, редактор не открывать — править Write/Edit.')
     }
 }
 
@@ -1001,6 +1019,27 @@ function Get-TurnTools([string]$path, [double]$since) {
 function Get-CsvCell($text) {
     return ([regex]::Replace([string]$text, '\s+', ' ')).Replace(';', ',').Trim()
 }
+$script:SlowCallS = 600
+function Set-SlowCall($data, $tt) {
+    # Один вызов инструмента ждал дольше SlowCallS — запомнить для начала следующего хода.
+    $worst = $null
+    foreach ($u in @($tt.uses)) {
+        if (-not $tt.results.ContainsKey($u.Id)) { continue }
+        $dur = [double]$tt.results[$u.Id] - $u.Ts
+        if ($dur -ge $script:SlowCallS -and ($null -eq $worst -or $dur -gt $worst.s)) { $worst = @{ s = [int]$dur; name = [string]$u.Name; target = (Get-Cut ([string](Get-ToolTarget $u.Input)) 80) } }
+    }
+    if ($null -eq $worst) { return }
+    try { ($worst | ConvertTo-Json -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'slow') -Encoding UTF8 } catch {}
+}
+function Get-SlowCallHint($data) {
+    $p = Get-StateFile $data 'slow'
+    if (-not (Test-Path -LiteralPath $p)) { return '' }
+    $st = $null
+    try { $st = (Get-Content -LiteralPath $p -Raw -Encoding UTF8) | ConvertFrom-Json; Remove-Item -LiteralPath $p -Force } catch { return '' }
+    if ($null -eq $st) { return '' }
+    $tg = [string](Get-Prop $st 'target'); if (-not $tg) { $tg = '…' }
+    return ('В прошлом ходе один вызов ' + [string](Get-Prop $st 'name') + ' (' + $tg + ') ждал ' + [int][math]::Floor([int](Get-Prop $st 's') / 60) + ' мин. Так не бывает у команды, которая работает: это запрос разрешения без владельца рядом, ожидание ввода или скрипт без конца. Дальше: долгое — только с timeout и в фоне с логом (проверять выводом, не ждать); разрешение нужно — спросить владельца словами до запуска; ввод нужен — ключ «без вопросов». Что это было и чем заменено — одной строкой в ответе.')
+}
 function Get-TimingRow($data, $snap, [string]$root) {
     $start = 0.0
     try { $start = [double](Get-Prop $snap 'ts') } catch { $start = 0.0 }
@@ -1026,6 +1065,7 @@ function Get-TimingRow($data, $snap, [string]$root) {
         if ($out -and ($outside -notcontains $out)) { $outside += $out }
     }
     if ($toolS -gt $total) { $toolS = $total }
+    Set-SlowCall $data $tt
     $pairs = @()
     foreach ($k in (Sort-Ordinal @($names.Keys))) { $pairs += [pscustomobject]@{ N = $k; C = [int]$names[$k] } }
     $top = ((@($pairs | Sort-Object -Property @{ Expression = 'C'; Descending = $true } | Select-Object -First 6) | ForEach-Object { $_.N + '*' + $_.C }) -join ' ')
@@ -1475,7 +1515,8 @@ function Invoke-TurnStart($data) {
     # Регистр не важен: «Дословно», «Не просил» с заглавной — те же слова (в Python re.I).
     $isExact = [regex]::IsMatch($promptRaw, $script:ExactRe, 'IgnoreCase')
     $isStatus = Test-StatusQuestion $promptRaw
-    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; exact = $isExact; prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
+    $isOk = ($promptRaw.Trim().Length -le 24) -and [regex]::IsMatch($promptRaw.Trim(), $script:OkRe, 'IgnoreCase')
+    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; ok = $isOk; exact = $isExact; prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -1499,6 +1540,8 @@ function Invoke-TurnStart($data) {
     if ($hint) { foreach ($line in $hint) { Write-Out $line } }
     $mt = Get-MainTaskHint $root
     if ($mt) { Write-Out $mt }
+    $sh = Get-SlowCallHint $data
+    if ($sh) { Write-Out $sh }
     if ($prompt.Length -lt 12) { return }
     Write-Out 'Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог» (если владелец не задал форму ответа). Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.'
 }

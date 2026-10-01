@@ -41,7 +41,10 @@ def static_py(cases, root):
 
     def _block(lines):
         raise Verdict('block\n' + '\n'.join(lines))
-    K.ask, K.block = _ask, _block
+
+    def _deny(reason):
+        raise Verdict('deny\n' + reason)
+    K.ask, K.block, K.deny = _ask, _block, _deny
     fn = {'guard-cyrillic': K.guard_cyrillic, 'guard-shell': K.guard_shell, 'guard-instructions': K.guard_instructions}
     res = {}
     for c in cases:
@@ -93,7 +96,7 @@ def call(impl, ps, cmd, data, root, env=None, args=None):
     elif r.returncode != 0:
         kind = 'error'
     elif '"permissionDecision"' in out:
-        kind = 'deny' if '"deny"' in out else 'ask'
+        kind = 'ask' if ('"ask"' in out or 'Его «да»' in out) else 'deny'
     elif out:
         kind = 'ctx'
     else:
@@ -485,6 +488,28 @@ def scenarios(impl, ps, tmp):
     check('хронометраж: старый файл отложен, не потерян',
           os.path.isfile(os.path.join(r, 'docs', 'ai', 'timing.old.csv')), '')
 
+    # медленный вызов: один инструмент ждал дольше 10 минут — следующий ход об этом скажет
+    rs = new_project(tmp, f'{impl}-s-slow')
+    s8 = f'{impl}-slow-{os.getpid()}'
+    trs = os.path.join(rs, 'transcript-slow.jsonl')
+    sdata = {'session_id': s8, 'cwd': rs, 'transcript_path': trs, 'scratchpad_dir': os.path.join(tmp, 'state')}
+    S('медленный вызов: начало хода', 'turn-start', dict(sdata, prompt='собери таблицу совпадений счетов и платёжек'), rs, 'ctx')
+    sf8 = os.path.join(tmp, 'state', 'starter-%s.turn.json' % re.sub(r'[^\w.-]', '_', s8))
+    try:
+        sn = json.load(open(sf8, encoding='utf-8')); sn['ts'] = time.time() - 900
+        json.dump(sn, open(sf8, 'w', encoding='utf-8'), ensure_ascii=False)
+    except Exception:
+        pass
+    t1 = time.time() - 890
+    with open(trs, 'w', encoding='utf-8') as fh:
+        fh.write('\n'.join(json.dumps(x, ensure_ascii=False) for x in [
+            use(t1, 'sl1', 'Bash', {'command': 'node tablica_html.mjs'}, usage(1, 1, 0, 1, 0)), res(t1 + 760, 'sl1')]) + '\n')
+    S('медленный вызов: конец хода', 'check-docs', sdata, rs, 'allow')
+    S('медленный вызов: следующий ход предупреждает', 'turn-start', dict(sdata, prompt='дальше по плану, продолжай работу'), rs, 'ctx', 'ждал 12 мин')
+    S('медленный вызов: сказано один раз', 'turn-start', dict(sdata, prompt='дальше по плану, продолжай работу'), rs, 'ctx')
+    if 'ждал' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'повтор подсказки', 'без подсказки', out[-1][4], '')
+
     # главная задача: последняя строка каждого ответа, вопрос не останавливает
     r = new_project(tmp, f'{impl}-s-main')
     write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n'
@@ -727,6 +752,15 @@ def scenarios(impl, ps, tmp):
       {'tool_input': {'command': 'cat > src/app.py <<EOF\nprint(1)\nEOF'}}, r, 'ask', 'через оболочку')
     S('оболочка: Set-Content в .ts — вопрос', 'guard-shell',
       {'tool_input': {'command': "Set-Content -Path src/util.ts -Value 'export const a = 1'"}}, r, 'ask', 'через оболочку')
+    S('«да» владельца: до него — вопрос', 'guard-shell', {'session_id': 'ok-' + impl, 'tool_input': {'command': 'pip install requests'}, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'ask')
+    S('«да» владельца: начало хода', 'turn-start', {'session_id': 'ok-' + impl, 'prompt': 'да', 'cwd': r, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'allow')
+    S('«да» владельца: тот же вызов проходит', 'guard-shell', {'session_id': 'ok-' + impl, 'tool_input': {'command': 'pip install requests'}, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'allow')
+    S('«да» владельца: следующий ход — снова вопрос', 'turn-start', {'session_id': 'ok-' + impl, 'prompt': 'теперь поставь ещё numpy', 'cwd': r, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'ctx')
+    S('«да» владельца: вопрос вернулся', 'guard-shell', {'session_id': 'ok-' + impl, 'tool_input': {'command': 'pip install numpy'}, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'ask')
+    S('оболочка: ssh без команды — отказ', 'guard-shell', {'tool_input': {'command': 'ssh nick@192.168.88.115'}}, r, 'deny', 'ждёт ввода')
+    S('оболочка: git commit без -m — отказ', 'guard-shell', {'tool_input': {'command': 'git commit'}}, r, 'deny', 'ждёт ввода')
+    S('оболочка: ssh с командой — молча', 'guard-shell', {'tool_input': {'command': 'ssh host bash /tmp/x.sh'}}, r, 'allow')
+    S('оболочка: git commit -m — молча', 'guard-shell', {'tool_input': {'command': 'git commit -m "x"'}}, r, 'allow')
     S('оболочка: временный файл — молча', 'guard-shell',
       {'tool_input': {'command': 'echo "x" > /tmp/scratch.py'}}, r, 'allow')
     S('оболочка: вывод программы в .txt — молча', 'guard-shell',
