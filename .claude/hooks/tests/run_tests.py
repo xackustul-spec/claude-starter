@@ -581,6 +581,17 @@ def scenarios(impl, ps, tmp):
     turn_with([tu('Bash', {'command': 'ssh host cat app/rivals-map.tsx'})])
     S('интерфейс: только чтение .tsx — молчит', 'check-docs', d10t, r, 'allow')
 
+    # переросший файл кода — раз за сеанс
+    rb = new_project(tmp, f'{impl}-s-big')
+    git(rb, 'init', '-q'); git(rb, 'add', '-A'); git(rb, 'commit', '-qm', 'init')
+    sb = f'{impl}-big-{os.getpid()}'
+    db = {'session_id': sb, 'cwd': rb, 'scratchpad_dir': os.path.join(tmp, 'state')}
+    S('большой файл: начало хода', 'turn-start', dict(db, prompt='поправь кнопку на счетах'), rb, 'ctx')
+    write(rb, 'app/main.py', '# Назначение: всё\n' + 'x = 1\n' * 1200)
+    write(rb, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: да\n')
+    S('большой файл: 1200 строк — предложить разделение', 'check-docs', db, rb, 'block', 'перерос предел')
+    S('большой файл: второй раз в сеансе — молчит про предел', 'check-docs', db, rb, 'allow')
+
     # «Следующий шаг»: первый пункт — один
     write(r, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: экран\n\n## Следующий шаг\n0а. Доделать всё\n0б. Разбор проверяющего\n0. Копия экранов\n1. Директ\n2. Telegram\n')
     S('очередь: четыре первых пункта — сказать при старте', 'session-start', {'source': 'startup'}, r, 'ctx', 'претендуют на первое место')

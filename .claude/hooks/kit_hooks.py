@@ -1794,6 +1794,39 @@ def stuck_lessons(root, min_reps):
     return stuck
 
 
+CODE_LINES_LIMIT = 1000
+
+
+def big_code_notice(data, top, touched):
+    # Тронутый файл кода длиннее CODE_LINES_LIMIT строк — раз за сеанс напомнить про разделение.
+    marker = state_file(data, 'bigcode')
+    if os.path.isfile(marker):
+        return []
+    big = []
+    for f in sorted(touched):
+        ext = os.path.splitext(f)[1].lower()
+        if ext not in HEADER_EXT and ext not in ('.css', '.scss', '.less', '.html', '.htm'):
+            continue
+        if GENERATED.search(f):
+            continue
+        try:
+            with open(os.path.join(top, f), 'rb') as fh:
+                n = sum(1 for _ in fh)
+        except Exception:
+            continue
+        if n > CODE_LINES_LIMIT:
+            big.append('%s (%d строк)' % (f, n))
+    if not big:
+        return []
+    try:
+        open(marker, 'w').write('1')
+    except Exception:
+        pass
+    return ['Файл кода перерос предел: ' + ', '.join(big[:3]) + '. На каждую правку читается он целиком. Предложить '
+            'владельцу разделение по экранам (project-restructure, §4а: только перенос, по шагу с коммитом) — одной '
+            'строкой в ответе и в STATE.md «Заметил». Один раз за сеанс.']
+
+
 def lessons_block_msgs(data, root):
     if data.get('stop_hook_active') is True:
         return []
@@ -1953,7 +1986,7 @@ def check_docs(data):
                           'значок, рамка, пунктир, колонка, подсказка, блок, поле), удали сейчас; непонятное — '
                           'один короткий вопрос. Сверил, лишнего нет — заканчивай ответ, владельцу про эту '
                           'проверку не писать.')
-    doc_msgs = task_msgs + exact_msgs + doc_problems(root, top, touched - deleted)
+    doc_msgs = task_msgs + exact_msgs + doc_problems(root, top, touched - deleted) + big_code_notice(data, top, touched - deleted)
     if any(re.search(r'(^|/)docs/ai/STATE\.md$', f) for f in touched - deleted):
         nsp = next_step_problem(root)
         if nsp:

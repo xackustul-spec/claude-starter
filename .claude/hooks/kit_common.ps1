@@ -1495,6 +1495,26 @@ function Get-StuckLessons([string]$root, [int]$minReps) {
     }
     return @($stuck)
 }
+$script:CodeLinesLimit = 1000
+function Get-BigCodeNotice($data, [string]$top, $touched) {
+    # Тронутый файл кода длиннее CodeLinesLimit строк — раз за сеанс напомнить про разделение.
+    $marker = Get-StateFile $data 'bigcode'
+    if (Test-Path -LiteralPath $marker) { return @() }
+    $big = @()
+    foreach ($f in (Sort-Ordinal @($touched))) {
+        $ext = [System.IO.Path]::GetExtension($f).ToLowerInvariant()
+        if (-not (($script:HeaderExt -contains $ext) -or (@('.css', '.scss', '.less', '.html', '.htm') -contains $ext))) { continue }
+        if ($f -match $script:Generated) { continue }
+        $full = Join-Path $top $f
+        if (-not (Test-Path -LiteralPath $full)) { continue }
+        $n = 0
+        try { $n = [System.IO.File]::ReadAllLines($full).Count } catch { continue }
+        if ($n -gt $script:CodeLinesLimit) { $big += ($f + ' (' + $n + ' строк)') }
+    }
+    if ($big.Count -eq 0) { return @() }
+    try { Set-Content -LiteralPath $marker -Value '1' -Encoding UTF8 } catch {}
+    return @('Файл кода перерос предел: ' + (($big | Select-Object -First 3) -join ', ') + '. На каждую правку читается он целиком. Предложить владельцу разделение по экранам (project-restructure, §4а: только перенос, по шагу с коммитом) — одной строкой в ответе и в STATE.md «Заметил». Один раз за сеанс.')
+}
 function Get-LessonsBlockMsgs($data, [string]$root) {
     if ((Get-Prop $data 'stop_hook_active') -eq $true) { return @() }
     $stuck = @(Get-StuckLessons $root 3)
@@ -1719,7 +1739,7 @@ function Invoke-CheckDocs($data) {
     if (($null -ne $snap) -and (Get-Prop $snap 'exact') -and ($alive.Count -gt 0)) {
         $exactMsgs += 'Владелец требовал сделать дословно. Прежде чем заканчивать: сверь по пунктам его словами, что просили и что сделано; всё, добавленное сверх просьбы (оформление, значок, рамка, пунктир, колонка, подсказка, блок, поле), удали сейчас; непонятное — один короткий вопрос. Сверил, лишнего нет — заканчивай ответ, владельцу про эту проверку не писать.'
     }
-    $docMsgs = @($taskMsgs) + @($exactMsgs) + @(Get-DocProblems $root $top $alive)
+    $docMsgs = @($taskMsgs) + @($exactMsgs) + @(Get-DocProblems $root $top $alive) + @(Get-BigCodeNotice $data $top $alive)
     if (@($alive | Where-Object { $_ -match '(^|/)docs/ai/STATE\.md$' }).Count -gt 0) {
         $nsp = Get-NextStepProblem $root
         if ($nsp) { $docMsgs += $nsp }
