@@ -222,5 +222,7 @@
         ]
       }
     ]
-  }
+  },
+  "effortLevel": "high",
+  "maxEffortLevel": "high"
 }

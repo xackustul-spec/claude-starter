@@ -166,5 +166,7 @@
         ]
       }
     ]
-  }
+  },
+  "effortLevel": "high",
+  "maxEffortLevel": "high"
 }
