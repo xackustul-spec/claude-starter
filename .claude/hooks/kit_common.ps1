@@ -532,6 +532,9 @@ function Invoke-GuardInstructions($data) {
     if ([string]::IsNullOrWhiteSpace($path) -or ($path -notmatch $script:InstrRe)) { return }
     $root = Get-ProjectDir $data
     if ((Test-UpdateMode $root) -and (Test-KitFileUntouched $root $path)) { return }
+    if (($path -match '(^|/)CLAUDE\.md$') -and [System.IO.File]::Exists((Join-Path (Join-Path $root '.claude') 'starter.json')) -and -not [System.IO.File]::Exists((Join-Path $root 'INSTALL.md'))) {
+        Out-Deny 'CLAUDE.md в проекте — ядро набора, его целиком заменяет обновление; правки в нём пропадут. Правило этого проекта — в .claude/rules/project.md (грузится всегда, набор его не трогает): строка с датой и словами владельца. Правило для части файлов — отдельный файл .claude/rules/ с paths.'
+    }
     if ($path -match $script:LocalSettingsRe) {
         $text = Get-Prop $ti 'content'
         if (($null -ne $text) -and (Test-LocalSettingsOk ([string]$text) (Get-ProjectDir $data))) { return }
@@ -787,8 +790,33 @@ function Test-Ps1Bom([string]$path) {
         ("Добавь BOM одной командой (PowerShell): `$p='" + $path + "'; [IO.File]::WriteAllText(`$p, [IO.File]::ReadAllText(`$p), (New-Object Text.UTF8Encoding(`$true)))"),
         'Либо оставь в файле только латиницу.')
 }
+$script:LayoutPropRe = '(?<![\w-])(width|min-width|max-width|height|min-height|max-height|margin(-\w+)?|padding(-\w+)?|position|z-index|float|overflow(-\w+)?|display|flex(-\w+)?|grid(-\w+)?|top|left|right|bottom|white-space|font-size)\s*:'
+$script:StyleExt = @('.css', '.scss', '.sass', '.less', '.html', '.htm', '.vue', '.svelte', '.tsx', '.jsx')
+function Invoke-LayoutGuard($data) {
+    # Write/Edit в файл стиля или разметки добавляет размер/положение — вернуть памятку (см. kit_hooks.py).
+    $ti = Get-Prop $data 'tool_input'
+    $path = [string](Get-Prop $ti 'file_path')
+    $ext = [System.IO.Path]::GetExtension($path).ToLowerInvariant()
+    if (-not ($script:StyleExt -contains $ext)) { return }
+    $hasNew = $null -ne ($ti.PSObject.Properties['new_string'])
+    $added = ''
+    if ($hasNew) { $added = [string](Get-Prop $ti 'new_string') } else { $added = [string](Get-Prop $ti 'content') }
+    if ($hasNew) {
+        $old = [string](Get-Prop $ti 'old_string')
+        if ($old) { $added = (($added -split "`n") | Where-Object { $_.Trim() -and -not $old.Contains($_) }) -join "`n" }
+    }
+    $hits = @{}
+    foreach ($l in ($added -split "`n")) {
+        $m = [regex]::Match($l, $script:LayoutPropRe, 'IgnoreCase')
+        if ($m.Success -and -not [regex]::IsMatch($l, 'var\(--|@apply|^\s*//')) { $hits[$m.Groups[1].Value.ToLowerInvariant()] = 1 }
+    }
+    if ($hits.Count -eq 0) { return }
+    $list = @($hits.Keys | Sort-Object | Select-Object -First 6) -join ', '
+    Out-Block @('В ' + [System.IO.Path]::GetFileName($path) + ' добавлено размер/положение: ' + $list + '. Перед тем как идти дальше: 1) grep — где ещё применяется этот селектор/класс и на каких страницах; общий элемент — править в общем месте (тема, общий класс), не в экране; 2) значение из темы или из документа вида, не «сырое» число; 3) снимок до/после на КАЖДОЙ странице с этим элементом и на 320 px — ничего не наезжает, не обрезано, не уехало, длинные слова переносятся, таблица в .table-wrap; 4) владелец не называл этот размер — не добавлять, вернуть как было. Проверил — продолжай.')
+}
 function Invoke-CheckPython($data) {
     $path = [string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')
+    Invoke-LayoutGuard $data
     if ($path.ToLowerInvariant().EndsWith('.ps1') -and (Test-Path -LiteralPath $path)) { Test-Ps1Bom $path; return }
     if (-not $path.ToLowerInvariant().EndsWith('.py') -or -not (Test-Path -LiteralPath $path)) { return }
     $py = Find-Python; if ($null -eq $py) { return }
@@ -1707,7 +1735,7 @@ function Clear-OldState($data) {
 # ------------------------------------------------------------- версия набора
 # Файлы набора (без документов проекта и сливаемых файлов) и их отпечатки — в .claude/starter.json.
 $script:KitSkipTop = @('.git', '.gitignore', 'docs', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json', 'VERSION', 'CHANGELOG.md')
-$script:KitSkipRel = @('.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json', '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock', '.claude/session.lock')
+$script:KitSkipRel = @('.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json', '.claude/rules/project.md', '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock', '.claude/session.lock')
 function Get-FileHash16([string]$path) {
     $raw = [System.IO.File]::ReadAllBytes($path)
     $buf = New-Object System.Collections.Generic.List[byte] ($raw.Length)

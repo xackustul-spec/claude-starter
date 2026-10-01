@@ -565,6 +565,7 @@ def guard_cyrillic(data):
 INSTR_RE = re.compile(r'(^|/)(CLAUDE(\.local|\.starter)?\.md|AGENTS\.md|\.mcp\.json|\.claude\.json)$'
                       r'|(^|/)\.claude/(rules|skills|hooks|agents|output-styles|commands|plugins)/'
                       r'|(^|/)\.claude/settings[\w.]*\.json$', re.I)
+CORE_RE = re.compile(r'(^|/)CLAUDE\.md$')
 
 
 # Защиты (разрешения и хуки) — вопрос при любом доверии: сам себе их Claude не отключает.
@@ -634,6 +635,10 @@ def guard_instructions(data):
     root = project_dir(data)
     if update_mode(root) and kit_file_untouched(root, path):
         return  # обновление набора: свой же файл, владелец его не менял — молча
+    if CORE_RE.search(path) and os.path.isfile(manifest_path(root)) and not os.path.isfile(os.path.join(root, 'INSTALL.md')):
+        deny('CLAUDE.md в проекте — ядро набора, его целиком заменяет обновление; правки в нём пропадут. '
+             'Правило этого проекта — в .claude/rules/project.md (грузится всегда, набор его не трогает): '
+             'строка с датой и словами владельца. Правило для части файлов — отдельный файл .claude/rules/ с paths.')
     if LOCAL_SETTINGS_RE.search(path):
         text = ti.get('content')
         if text is not None and local_settings_ok(str(text), project_dir(data)):
@@ -959,8 +964,44 @@ def check_ps1_bom(path):
            'Либо оставь в файле только латиницу.'])
 
 
+# Размерные и позиционные свойства: добавленные в экранный стиль, они чаще всего и ломают соседей.
+LAYOUT_PROP_RE = re.compile(r'(?<![\w-])(width|min-width|max-width|height|min-height|max-height|margin(-\w+)?|'
+                            r'padding(-\w+)?|position|z-index|float|overflow(-\w+)?|display|flex(-\w+)?|grid(-\w+)?|'
+                            r'top|left|right|bottom|white-space|font-size)\s*:', re.I)
+STYLE_EXT = ('.css', '.scss', '.sass', '.less', '.html', '.htm', '.vue', '.svelte', '.tsx', '.jsx')
+
+
+def layout_guard(data):
+    # Write/Edit в файл стиля или разметки добавляет размер/положение — вернуть памятку: где ещё этот
+    # селектор, общий ли элемент, снимок до/после. Повод: ширина, вписанная «где не нужно», ломала
+    # отображение на всех страницах, и так много раз.
+    ti = data.get('tool_input') or {}
+    path = str(ti.get('file_path') or '')
+    if not path.lower().endswith(STYLE_EXT):
+        return
+    added = str(ti.get('new_string') if 'new_string' in ti else ti.get('content') or '')
+    if 'new_string' in ti and ti.get('old_string'):
+        old = str(ti.get('old_string') or '')
+        added = '\n'.join(l for l in added.splitlines() if l.strip() and l not in old)
+    hits = []
+    for l in added.splitlines():
+        m = LAYOUT_PROP_RE.search(l)
+        if m and not re.search(r'var\(--|@apply|^\s*//', l):
+            hits.append(m.group(1).lower())
+    if not hits:
+        return
+    hits = sorted(set(hits))[:6]
+    block(['В ' + os.path.basename(path) + ' добавлено размер/положение: ' + ', '.join(hits) + '. Перед тем как идти дальше: '
+           '1) grep — где ещё применяется этот селектор/класс и на каких страницах; общий элемент — править в общем '
+           'месте (тема, общий класс), не в экране; 2) значение из темы или из документа вида, не «сырое» число; '
+           '3) снимок до/после на КАЖДОЙ странице с этим элементом и на 320 px — ничего не наезжает, не обрезано, '
+           'не уехало, длинные слова переносятся, таблица в .table-wrap; 4) владелец не называл этот размер — не '
+           'добавлять, вернуть как было. Проверил — продолжай.'])
+
+
 def check_python(data):
     path = str((data.get('tool_input') or {}).get('file_path') or '')
+    layout_guard(data)
     if path.lower().endswith('.ps1') and os.path.isfile(path):
         check_ps1_bom(path)
         return
@@ -2146,7 +2187,7 @@ def interface_notice(root):
 # Файлы набора (без документов проекта и сливаемых файлов) и их отпечатки — в .claude/starter.json.
 KIT_SKIP_TOP = {'.git', '.gitignore', 'docs', 'README.md', 'INSTALL.md', 'CLAUDE.md', '.mcp.json',
                 'VERSION', 'CHANGELOG.md'}
-KIT_SKIP_REL = {'.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json',
+KIT_SKIP_REL = {'.claude/settings.json', '.claude/settings.unix.json', '.claude/starter.json', '.claude/rules/project.md',
                 '.claude/settings.local.json', 'starter.lock', '.claude/starter.lock', '.claude/session.lock'}
 
 

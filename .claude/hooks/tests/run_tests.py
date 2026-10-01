@@ -652,14 +652,26 @@ def scenarios(impl, ps, tmp):
       {'tool_name': 'Write', 'tool_input': {'file_path': r + '/Dockerfile', 'content': 'x'}}, r, 'ctx', 'code.md')
     S('pre-write: кириллица — блок', 'pre-write',
       {'tool_name': 'Write', 'tool_input': {'file_path': r + '/docs/ai/previews/_test.ts', 'content': 'const ПРОБА = 1'}}, r, 'block', 'ПРОБА')
+    write(r, '.claude/starter.json', '{"version": "1.0.0", "files": {}}\n')
+    S('pre-write: CLAUDE.md в проекте с набором — отказ', 'pre-write',
+      {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/CLAUDE.md', 'old_string': 'a', 'new_string': 'b'}}, r, 'deny', 'rules/project.md',
+      env={'CLAUDE_TRUST_LEVEL': 'full'})
     S('pre-write: settings.json — вопрос', 'pre-write',
       {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/.claude/settings.json', 'old_string': 'a', 'new_string': 'b'}}, r, 'ask')
     S('pre-write: settings.json при полном доверии — вопрос', 'pre-write',
       {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/.claude/settings.json', 'old_string': 'a', 'new_string': 'b'}}, r, 'ask',
       env={'CLAUDE_TRUST_LEVEL': 'full'})
-    S('pre-write: CLAUDE.md при полном доверии — можно', 'pre-write',
-      {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/CLAUDE.md', 'old_string': 'a', 'new_string': 'b'}}, r, 'allow',
+    S('pre-write: CLAUDE.md при полном доверии — всё равно отказ (ядро наборное)', 'pre-write',
+      {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/CLAUDE.md', 'old_string': 'a', 'new_string': 'b'}}, r, 'deny', 'rules/project.md',
       env={'CLAUDE_TRUST_LEVEL': 'full'})
+    S('стиль: ширина в css — памятка', 'check-python',
+      {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/app/static/app.css', 'old_string': '.mtab{}', 'new_string': '.mtab{ width: 62px; color: red }'}}, r, 'block', 'размер/положение: width')
+    S('стиль: цвет без размера — молчит', 'check-python',
+      {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/app/static/app.css', 'old_string': 'a', 'new_string': '.x{ color: red; background: var(--bg) }'}}, r, 'allow')
+    S('стиль: значение из темы — молчит', 'check-python',
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/app/static/t.css', 'content': '.x{ width: var(--col-w) }'}}, r, 'allow')
+    S('стиль: python не трогаем', 'check-python',
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/app/x.py', 'content': 'width: 1'}}, r, 'allow')
     write(r, 'docs/ai/PROFILE.md', '## Профиль работы\n- Доверие: полное (осторожное / обычное / полное)\n')
     S('личные настройки: доверие по профилю — молча', 'pre-write',
       {'tool_name': 'Write', 'tool_input': {'file_path': r + '/.claude/settings.local.json',

@@ -1,0 +1,18 @@
+/* Назначение: база вёрстки для нового каркаса — убирает большинство поломок на узких экранах.
+   Подключать первой, до темы и библиотеки; экраны её не переопределяют. Фиксированная ширина
+   у контейнеров не задаётся: width: 100% и max-width; таблица — всегда внутри .table-wrap. */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+img, video, svg { max-width: 100%; height: auto; display: block; }
+
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+th, td { padding: 0.5rem 0.75rem; text-align: left; vertical-align: top;
+         overflow-wrap: anywhere; word-break: break-word; }
+
+/* Дети flex/grid без min-width: 0 не сжимаются, и длинный текст выталкивает соседей. */
+.flex > *, .grid > * { min-width: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(250px, 100%), 1fr)); gap: 1rem; }
+
+/* Длинные слова, адреса и почта не выходят за край. */
+p, li, dd, td, th, .wrap-any { overflow-wrap: anywhere; hyphens: auto; }
