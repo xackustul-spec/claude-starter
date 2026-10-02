@@ -560,6 +560,7 @@ def scenarios(impl, ps, tmp):
     S('вопрос: Read можно', 'pre-read', dict(d10, tool_name='Read', tool_input={'file_path': r + '/src/x.py'}), r, 'allow')
     S('вопрос: grep в оболочке можно', 'guard-shell', dict(d10, tool_input={'command': 'grep -n mtab src/app.css'}), r, 'allow')
     S('вопрос: sed -i — отказ', 'guard-shell', dict(d10, tool_input={'command': 'sed -i s/a/b/ src/app.css'}), r, 'deny', 'только ответ словами')
+    S('вопрос: «чат: сделай…» — всё равно режим ответа', 'turn-start', dict(d10, prompt='чат: сделай кнопку серой — как это лучше?'), r, 'ctx', 'это вопрос')
     S('вопрос: «сделай кнопку серой» — не вопрос', 'turn-start', dict(d10, prompt='сделай кнопку серой, как у остальных?'), r, 'ctx')
     if 'это вопрос' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')

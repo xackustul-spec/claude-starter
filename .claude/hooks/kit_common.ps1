@@ -1418,6 +1418,7 @@ $script:AnswerHint = 'Набор: это вопрос, а не задание. �
 $script:AnswerDeny = 'Ход начался с вопроса владельца — в нём только ответ словами. Нужна работа — спроси одной строкой «сделать: <что>?» и закончи ход; его «да» следующим сообщением откроет этот вызов.'
 function Test-Question([string]$prompt) {
     $p = $prompt.Trim()
+    if ([regex]::IsMatch($p, '^\W*(чат|chat)\s*[:：]', 'IgnoreCase')) { return $true }
     if (-not $p -or $p.Length -gt 300 -or $p.StartsWith('<')) { return $false }
     if (-not [regex]::IsMatch($p, $script:QuestionRe, 'IgnoreCase')) { return $false }
     if ([regex]::IsMatch($p, $script:WorkRe, 'IgnoreCase')) { return $false }

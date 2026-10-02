@@ -1709,8 +1709,13 @@ ANSWER_DENY = ('Ход начался с вопроса владельца — �
                '«сделать: <что>?» и закончи ход; его «да» следующим сообщением откроет этот вызов.')
 
 
+CHAT_PREFIX_RE = re.compile(r'^\W*(чат|chat)\s*[:：]', re.I)
+
+
 def is_question(prompt):
     p = prompt.strip()
+    if CHAT_PREFIX_RE.match(p):
+        return True  # «чат: …» — режим ответа принудительно, какие бы глаголы ни были дальше
     return bool(p) and len(p) <= 300 and bool(QUESTION_RE.search(p)) and not WORK_RE.search(p) and not p.startswith('<')
 
 

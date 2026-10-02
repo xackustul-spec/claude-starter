@@ -1,3 +1,9 @@
+---
+paths:
+  - "**/*.{tsx,jsx,vue,svelte,html,htm,css,scss,py,php,ts,js}"
+  - "**/{templates,components,pages,views,app,src}/**"
+---
+
 # Экран показывает правду о данных, а не догадку
 
 - IMPORTANT: «подключено», «проверено», «работает» ставится только после удачного живого ответа

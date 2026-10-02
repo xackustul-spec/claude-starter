@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/*.{sh,ps1,yml,yaml}"
+  - "**/{installers,deploy,scripts,infra,docker,_up}/**"
+  - "**/Dockerfile*"
+  - "**/docker-compose*"
+---
+
 # Выкладка и применение правок
 
 - IMPORTANT: **выложено = сверено на месте назначения**: контрольные суммы файлов в контейнере или
