@@ -1,6 +1,7 @@
 {
   "env": {
-    "CLAUDE_TRUST_LEVEL": "normal"
+    "CLAUDE_TRUST_LEVEL": "normal",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "150000"
   },
   "autoMemoryEnabled": false,
   "permissions": {
@@ -176,5 +177,6 @@
         ]
       }
     ]
-  }
+  },
+  "model": "sonnet"
 }
