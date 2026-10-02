@@ -131,6 +131,16 @@
             "timeout": 20
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/run.sh\" pre-agent",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -166,7 +176,5 @@
         ]
       }
     ]
-  },
-  "effortLevel": "high",
-  "maxEffortLevel": "high"
+  }
 }

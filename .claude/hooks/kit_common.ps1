@@ -706,6 +706,19 @@ function Invoke-GuardDocsOnUpdate($data) {
             'Закончи обновление, убери starter.lock, и только потом правь документы.')
     }
 }
+$script:AgentCap = "`n`nПредел: 8 минут и 15 вызовов инструментов. Упёрся во вход, окно разрешения, пустую или зависшую страницу, недоступный адрес — не ждать и не пробовать по кругу: вернуться сразу, первой строкой «нужно: <что именно>», дальше — что успел. Итог — коротко, без пересказа шагов."
+function Invoke-PreAgent($data) {
+    # Субагенту — предел времени и вызовов прямо в задание (см. kit_hooks.py).
+    $ti = Get-Prop $data 'tool_input'
+    $prompt = [string](Get-Prop $ti 'prompt')
+    if (-not $prompt -or $prompt.Contains('Предел:')) { return }
+    $new = @{}
+    foreach ($pp in $ti.PSObject.Properties) { $new[$pp.Name] = $pp.Value }
+    $new['prompt'] = $prompt.TrimEnd() + $script:AgentCap
+    $o = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; updatedInput = $new } }
+    Write-Out ($o | ConvertTo-Json -Depth 8 -Compress)
+    exit 0
+}
 function Invoke-PreWrite($data) {
     # Один процесс на Write/Edit: обновление набора → чужая папка → кириллица → инструкции → правила.
     Invoke-GuardDocsOnUpdate $data

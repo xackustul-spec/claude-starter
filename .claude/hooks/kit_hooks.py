@@ -849,6 +849,24 @@ def guard_docs_on_update(data):
                'Закончи обновление, убери starter.lock, и только потом правь документы.'])
 
 
+AGENT_CAP = ('\n\nПредел: 8 минут и 15 вызовов инструментов. Упёрся во вход, окно разрешения, пустую или '
+             'зависшую страницу, недоступный адрес — не ждать и не пробовать по кругу: вернуться сразу, первой '
+             'строкой «нужно: <что именно>», дальше — что успел. Итог — коротко, без пересказа шагов.')
+
+
+def pre_agent(data):
+    # Субагенту — предел времени и вызовов прямо в задание: он висит на том же, на чём и основной сеанс,
+    # а его ожидание считается временем инструмента основного хода (ERP: 26 минут на одной проверке).
+    ti = data.get('tool_input') or {}
+    prompt = str(ti.get('prompt') or '')
+    if not prompt or 'Предел:' in prompt:
+        return
+    new = dict(ti)
+    new['prompt'] = prompt.rstrip() + AGENT_CAP
+    out_json({"hookSpecificOutput": {"hookEventName": "PreToolUse", "updatedInput": new}})
+    sys.exit(0)
+
+
 def pre_write(data):
     # Один процесс на Write/Edit: обновление набора → чужая папка → кириллица → инструкции → правила.
     guard_docs_on_update(data)
@@ -2461,7 +2479,7 @@ COMMANDS = {
     'guard-shell': guard_shell, 'guard-cyrillic': guard_cyrillic, 'guard-instructions': guard_instructions,
     'rules-on-write': rules_on_write, 'check-python': check_python, 'turn-start': turn_start,
     'session-start': session_start, 'check-docs': check_docs, 'pre-write': pre_write, 'pre-read': guard_read,
-    'read-budget': read_budget,
+    'read-budget': read_budget, 'pre-agent': pre_agent,
 }
 
 if __name__ == '__main__':

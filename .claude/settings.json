@@ -166,6 +166,23 @@
             "timeout": 20
           }
         ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/pre-agent.ps1"
+            ],
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -222,7 +239,5 @@
         ]
       }
     ]
-  },
-  "effortLevel": "high",
-  "maxEffortLevel": "high"
+  }
 }
