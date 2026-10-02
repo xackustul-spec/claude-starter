@@ -1435,10 +1435,15 @@ function Get-TurnSnap($data) {
     try { $sf = Get-StateFile $data 'turn'; if (Test-Path -LiteralPath $sf) { return ((Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json) } } catch {}
     return $null
 }
+$script:MemoryPathRe = '(^|/)(docs/ai/[^/]+\.md|docs/ai/(specs|solutions)/.+\.md|\.claude/rules/project\.md)$'
 function Invoke-GuardStatusWrite($data) {
     $snap = Get-TurnSnap $data
-    if ($snap -and (Get-Prop $snap 'ready_q') -eq $true) { Out-Deny $script:StatusDeny }
-    if ($snap -and (Get-Prop $snap 'answer') -eq $true) { Out-Deny $script:AnswerDeny }
+    if (-not $snap) { return }
+    if (-not ((Get-Prop $snap 'ready_q') -eq $true -or (Get-Prop $snap 'answer') -eq $true)) { return }
+    $path = ([string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')) -replace '\\', '/'
+    if ([regex]::IsMatch($path, $script:MemoryPathRe, 'IgnoreCase')) { return }
+    if ((Get-Prop $snap 'ready_q') -eq $true) { Out-Deny $script:StatusDeny }
+    Out-Deny $script:AnswerDeny
 }
 function Invoke-GuardStatusShell([string]$cmd, $data) {
     $snap = Get-TurnSnap $data

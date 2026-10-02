@@ -1737,12 +1737,19 @@ CHANGE_CMD_RE = re.compile(r'(^|[\s;&|("\'])(scp|rsync|patch|tee|sed\s+-i|git\s+
                             r'(build|up|restart)|npm\s+run\s+build|cp|mv|Set-Content|Out-File|Add-Content)\b|>\s*(?!&|/dev/null)\S', re.I)
 
 
+MEMORY_PATH_RE = re.compile(r'(^|/)(docs/ai/[^/]+\.md|docs/ai/(specs|solutions)/.+\.md|\.claude/rules/project\.md)$', re.I)
+
+
 def guard_status_write(data):
     snap = turn_snap(data)
+    if not (snap.get('ready_q') or snap.get('answer')):
+        return
+    path = str((data.get('tool_input') or {}).get('file_path') or '').replace('\\', '/')
+    if MEMORY_PATH_RE.search(path):
+        return  # память проекта (STATE, KNOWLEDGE, правила владельца) пишется и в ход-ответ: мысли и пожелания не теряются
     if snap.get('ready_q'):
         deny(STATUS_DENY)
-    if snap.get('answer'):
-        deny(ANSWER_DENY)
+    deny(ANSWER_DENY)
 
 
 def guard_status_shell(cmd, data):

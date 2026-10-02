@@ -557,6 +557,8 @@ def scenarios(impl, ps, tmp):
     S('вопрос: «почему в марте 5000?» — подсказка', 'turn-start', dict(d10, prompt='почему в марте 5000?'), r, 'ctx', 'это вопрос')
     S('вопрос: Write в этом ходе — отказ', 'pre-write',
       dict(d10, tool_name='Edit', tool_input={'file_path': r + '/src/x.py', 'old_string': 'a', 'new_string': 'b'}), r, 'deny', 'только ответ словами')
+    S('вопрос: запись в KNOWLEDGE можно', 'pre-write',
+      dict(d10, tool_name='Edit', tool_input={'file_path': r + '/docs/ai/KNOWLEDGE.md', 'old_string': 'a', 'new_string': 'b'}), r, 'allow')
     S('вопрос: Read можно', 'pre-read', dict(d10, tool_name='Read', tool_input={'file_path': r + '/src/x.py'}), r, 'allow')
     S('вопрос: grep в оболочке можно', 'guard-shell', dict(d10, tool_input={'command': 'grep -n mtab src/app.css'}), r, 'allow')
     S('вопрос: sed -i — отказ', 'guard-shell', dict(d10, tool_input={'command': 'sed -i s/a/b/ src/app.css'}), r, 'deny', 'только ответ словами')
