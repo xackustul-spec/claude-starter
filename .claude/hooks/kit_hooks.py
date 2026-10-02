@@ -1695,6 +1695,25 @@ STATUS_HINT = ('Набор: владелец спрашивает о готов�
                'после его слова.\n')
 
 
+# Вопрос, а не задание: ответить словами, правок не делать; нужна работа — спросить «сделать?» и закончить ход.
+QUESTION_RE = re.compile(r'(\?\s*$|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|'
+                         r'это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли)\b)', re.I)
+WORK_RE = re.compile(r'\b(сделай|сделать|добавь|добавить|исправь|исправить|убери|убрать|поправь|поправить|замени|'
+                     r'заменить|проверь|проверить|запусти|выложи|перенеси|напиши|создай|удали|обнови|продолжай|'
+                     r'доделай|делай|давай|разбей|подключи|настрой|почини|верни)\b', re.I)
+ANSWER_HINT = ('Набор: это вопрос, а не задание. Ответить словами — из головы, STATE и одного взгляда в код (Read/Grep '
+               'можно); правок, команд с записью и коммитов в этом ходе нет (хук не пропустит). Чтобы ответить, нужна '
+               'работа, или неясно, ответ нужен или работа, — спросить одной строкой «сделать: <что>?» и закончить ход; '
+               'его «да» откроет.\n')
+ANSWER_DENY = ('Ход начался с вопроса владельца — в нём только ответ словами. Нужна работа — спроси одной строкой '
+               '«сделать: <что>?» и закончи ход; его «да» следующим сообщением откроет этот вызов.')
+
+
+def is_question(prompt):
+    p = prompt.strip()
+    return bool(p) and len(p) <= 300 and bool(QUESTION_RE.search(p)) and not WORK_RE.search(p) and not p.startswith('<')
+
+
 def is_status_question(prompt):
     p = prompt.strip()
     return bool(p) and len(p) <= 160 and bool(STATUS_RE.search(p)) and not STATUS_WORK_RE.search(p)
@@ -1714,13 +1733,20 @@ CHANGE_CMD_RE = re.compile(r'(^|[\s;&|("\'])(scp|rsync|patch|tee|sed\s+-i|git\s+
 
 
 def guard_status_write(data):
-    if turn_snap(data).get('ready_q'):
+    snap = turn_snap(data)
+    if snap.get('ready_q'):
         deny(STATUS_DENY)
+    if snap.get('answer'):
+        deny(ANSWER_DENY)
 
 
 def guard_status_shell(cmd, data):
-    if turn_snap(data).get('ready_q') and CHANGE_CMD_RE.search(cmd):
-        deny(STATUS_DENY)
+    snap = turn_snap(data)
+    if CHANGE_CMD_RE.search(cmd):
+        if snap.get('ready_q'):
+            deny(STATUS_DENY)
+        if snap.get('answer'):
+            deny(ANSWER_DENY)
 
 
 # ------------------------------------------- проверяющий интерфейса: менялись экраны — ui-checker обязан сходить
@@ -1871,6 +1897,7 @@ def turn_start(data):
     snap = {'ts': time.time(), 'head': None, 'status': {},
             'exact': bool(EXACT_RE.search(prompt_raw)),
             'ready_q': is_status_question(prompt_raw),
+            'answer': (not is_status_question(prompt_raw)) and is_question(prompt_raw),
             'ok': bool(OK_RE.match(prompt_raw.strip())) and len(prompt_raw.strip()) <= 24,
             'prompt': mask_secrets(re.sub(r'\s+', ' ', prompt_raw).strip())[:140]}
     head = git(root, 'rev-parse', 'HEAD')
@@ -1898,6 +1925,8 @@ def turn_start(data):
             sys.stdout.write(ih)
     if snap['ready_q']:
         sys.stdout.write(STATUS_HINT)
+    elif snap['answer']:
+        sys.stdout.write(ANSWER_HINT)
     elif VAGUE_RE.search(prompt):
         sys.stdout.write(VAGUE_HINT)
     if snap['exact']:

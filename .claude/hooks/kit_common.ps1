@@ -1412,6 +1412,17 @@ $script:StatusWorkRe = '\b(сделай|доделай|делай|продолж
 $script:StatusHint = 'Набор: владелец спрашивает о готовности. В этом ходе — только ответ, по таблице готовности (часть · сделано · проверено · сверил владелец): да/нет, что осталось списком, сколько это займёт. Таблицы нет — составить её сейчас в документе главной задачи и ответить по ней. Правки файлов, команды на сервер и коммиты в этом ходе запрещены (хук не пропустит); работа — следующим ходом, после его слова.'
 $script:StatusDeny = 'Ход начался с вопроса владельца о готовности — в нём только ответ по таблице готовности, без правок и команд, которые что-то меняют. Ответь сейчас; работу — следующим ходом, когда он скажет.'
 $script:ChangeCmdRe = '(^|[\s;&|("''])(scp|rsync|patch|tee|sed\s+-i|git\s+(commit|push|apply)|docker\s+(compose\s+)?(build|up|restart)|npm\s+run\s+build|cp|mv|Set-Content|Out-File|Add-Content)\b|>\s*(?!&|/dev/null)\S'
+$script:QuestionRe = '(\?\s*$|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли)\b)'
+$script:WorkRe = '\b(сделай|сделать|добавь|добавить|исправь|исправить|убери|убрать|поправь|поправить|замени|заменить|проверь|проверить|запусти|выложи|перенеси|напиши|создай|удали|обнови|продолжай|доделай|делай|давай|разбей|подключи|настрой|почини|верни)\b'
+$script:AnswerHint = 'Набор: это вопрос, а не задание. Ответить словами — из головы, STATE и одного взгляда в код (Read/Grep можно); правок, команд с записью и коммитов в этом ходе нет (хук не пропустит). Чтобы ответить, нужна работа, или неясно, ответ нужен или работа, — спросить одной строкой «сделать: <что>?» и закончить ход; его «да» откроет.'
+$script:AnswerDeny = 'Ход начался с вопроса владельца — в нём только ответ словами. Нужна работа — спроси одной строкой «сделать: <что>?» и закончи ход; его «да» следующим сообщением откроет этот вызов.'
+function Test-Question([string]$prompt) {
+    $p = $prompt.Trim()
+    if (-not $p -or $p.Length -gt 300 -or $p.StartsWith('<')) { return $false }
+    if (-not [regex]::IsMatch($p, $script:QuestionRe, 'IgnoreCase')) { return $false }
+    if ([regex]::IsMatch($p, $script:WorkRe, 'IgnoreCase')) { return $false }
+    return $true
+}
 function Test-StatusQuestion([string]$prompt) {
     $p = $prompt.Trim()
     if (-not $p -or $p.Length -gt 160) { return $false }
@@ -1426,10 +1437,13 @@ function Get-TurnSnap($data) {
 function Invoke-GuardStatusWrite($data) {
     $snap = Get-TurnSnap $data
     if ($snap -and (Get-Prop $snap 'ready_q') -eq $true) { Out-Deny $script:StatusDeny }
+    if ($snap -and (Get-Prop $snap 'answer') -eq $true) { Out-Deny $script:AnswerDeny }
 }
 function Invoke-GuardStatusShell([string]$cmd, $data) {
     $snap = Get-TurnSnap $data
-    if ($snap -and (Get-Prop $snap 'ready_q') -eq $true -and [regex]::IsMatch($cmd, $script:ChangeCmdRe, 'IgnoreCase')) { Out-Deny $script:StatusDeny }
+    if (-not $snap -or -not [regex]::IsMatch($cmd, $script:ChangeCmdRe, 'IgnoreCase')) { return }
+    if ((Get-Prop $snap 'ready_q') -eq $true) { Out-Deny $script:StatusDeny }
+    if ((Get-Prop $snap 'answer') -eq $true) { Out-Deny $script:AnswerDeny }
 }
 # ------------------------------------------- проверяющий интерфейса: менялись экраны — ui-checker обязан сходить
 $script:UiFileRe = '[\w./\\-]+\.(tsx|jsx|vue|svelte|css|scss|less|html?)\b'
@@ -1548,8 +1562,9 @@ function Invoke-TurnStart($data) {
     # Регистр не важен: «Дословно», «Не просил» с заглавной — те же слова (в Python re.I).
     $isExact = [regex]::IsMatch($promptRaw, $script:ExactRe, 'IgnoreCase')
     $isStatus = Test-StatusQuestion $promptRaw
+    $isAnswer = (-not $isStatus) -and (Test-Question $promptRaw)
     $isOk = ($promptRaw.Trim().Length -le 24) -and [regex]::IsMatch($promptRaw.Trim(), $script:OkRe, 'IgnoreCase')
-    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; ok = $isOk; exact = $isExact; prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
+    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; ok = $isOk; exact = $isExact; prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -1565,6 +1580,7 @@ function Invoke-TurnStart($data) {
     if ($hasSecret) { Write-Out $script:SecretHint }
     if (-not $prompt.StartsWith('<')) { $ih = Get-IndexHint $root $prompt; if ($ih) { Write-Out $ih } }
     if ($isStatus) { Write-Out $script:StatusHint }
+    elseif ($isAnswer) { Write-Out $script:AnswerHint }
     elseif ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
     if ($isExact) { Write-Out $script:ExactHint }
     $ctxHint = Get-ContextHint $root
