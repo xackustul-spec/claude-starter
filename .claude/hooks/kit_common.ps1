@@ -1522,6 +1522,25 @@ function Get-CloneClaimMsgs($data, [string]$root, [double]$since) {
     }
     return @('В ответе сказано, что экран как в эталоне, но нет доказательства. Нужно (скилл clone-screen): строка «Сверка: N из M» — счёт элементов из описи эталона по таблице проверяющего — и путь к паре снимков (pair.html: эталон слева, наш экран справа). Нет описи и пары — слова о совпадении убрать и сказать, что сделано на деле.')
 }
+# ------------------------------------------- замер вёрстки: правили интерфейс — в ответе числа замера, и они нулевые
+# Урок 03.10.2026: правила вёрстки и проверяющий «глазами» не ловят наезды в 5–10 px; ловит только замер в браузере.
+$script:MeasureLineRe = 'замер\s+в[её]рстки\s*:([^\n]*)'
+$script:MeasureNumRe = '(\d{3,4})\s*[—–-]\s*(\d+)'
+$script:MeasureMissing = 'Менялись файлы интерфейса (%s), а строки замера в ответе нет. Замер обязателен (скилл layout-check): открыть экран в браузере, выполнить .claude/skills/layout-check/layout-check.js на ширинах 320, 768 и 1280, исправить всё найденное и написать в ответе строку «Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0». Браузера нет — «Замер вёрстки: не выполнен — <почему>» первой строкой ответа, и экран владельцу не сдавать.'
+$script:MeasureDirty = 'Замер вёрстки показал проблемы (%s), а ход заканчивается. Наезды, вылезания и обрезанный текст исправляются до сдачи: править общий стиль, замерить снова, пока не будет 0 на всех ширинах. Наложение задумано — пометить элемент data-overlap-ok и назвать его владельцу.'
+function Get-LayoutMeasureMsgs($data, [string]$root, [double]$since) {
+    if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path (Join-Path $root '.claude') 'skills') 'layout-check') 'layout-check.js'))) { return @() }
+    $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) $since
+    $ch = Get-UiChanges $tt.uses
+    if ($ch.files.Count -eq 0) { return @() }
+    $ans = [string](Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since)
+    $m = [regex]::Match($ans, $script:MeasureLineRe, 'IgnoreCase')
+    if (-not $m.Success) { return @($script:MeasureMissing.Replace('%s', (($ch.files | Select-Object -First 4) -join ', '))) }
+    $bad = @()
+    foreach ($x in [regex]::Matches($m.Groups[1].Value, $script:MeasureNumRe)) { if ([int]$x.Groups[2].Value -gt 0) { $bad += ($x.Groups[1].Value + ' — ' + $x.Groups[2].Value) } }
+    if ($bad.Count -gt 0) { return @($script:MeasureDirty.Replace('%s', ($bad -join ', '))) }
+    return @()
+}
 # ------------------------------------------- «Следующий шаг»: первый пункт — один
 function Get-NextStepProblem([string]$root) {
     $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
@@ -1754,7 +1773,7 @@ function Invoke-CheckDocs($data) {
     $since = -1.0
     if ($snap) { try { $since = [double](Get-Prop $snap 'ts') - 1.0 } catch { $since = -1.0 } }
     $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
-    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
+    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
     $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {

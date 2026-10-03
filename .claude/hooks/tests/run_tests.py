@@ -593,16 +593,29 @@ def scenarios(impl, ps, tmp):
     S('интерфейс: заплатка на .tsx без проверяющего — вернуть', 'check-docs', d10t, r, 'block', 'ui-checker не ходил')
     S('интерфейс: повторный Stop — проверяющего всё нет, второй возврат', 'check-docs', dict(d10t, stop_hook_active=True), r, 'block', 'Повторно')
     S('интерфейс: третий проход — не зацикливается', 'check-docs', dict(d10t, stop_hook_active=True), r, 'allow')
-    turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}),
-               tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'})])
-    S('интерфейс: проверяющий ходил — молчит', 'check-docs', d10t, r, 'allow')
+    def tx(text):
+        return {'type': 'assistant', 'timestamp': iso(time.time() + 3), 'message': {'model': 'claude-opus-5', 'content': [{'type': 'text', 'text': text}]}}
+
+    edit_ui = [tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}),
+               tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'})]
+    has_measure = os.path.isfile(os.path.join(r, '.claude', 'skills', 'layout-check', 'layout-check.js'))
+    turn_with(edit_ui + [tx('Карта поправлена. Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0.')])
+    S('интерфейс: проверяющий ходил, замер нулевой — молчит', 'check-docs', d10t, r, 'allow')
+    if has_measure:
+        S('замер: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
+        turn_with(edit_ui + [tx('Карта поправлена, отступы выровнены.')])
+        S('замер: правили экран, строки замера нет — вернуть', 'check-docs', d10t, r, 'block', 'строки замера')
+        S('замер: начало хода 2', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
+        turn_with(edit_ui + [tx('Карта поправлена. Замер вёрстки: 320 — 3, 768 — 0, 1280 — 0.')])
+        S('замер: есть проблемы на 320 — вернуть', 'check-docs', d10t, r, 'block', '320 — 3')
+        S('замер: начало хода 3', 'turn-start', dict(d10t, prompt='объясни карту'), r, 'ctx')
+        turn_with([tx('Карта строится из таблицы позиций.')])
+        S('замер: интерфейс не правили — молчит', 'check-docs', d10t, r, 'allow')
+        S('замер: начало хода 4', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
     turn_with([tu('Bash', {'command': 'ssh host cat app/rivals-map.tsx'})])
     S('интерфейс: только чтение .tsx — молчит', 'check-docs', d10t, r, 'allow')
 
     # «как в эталоне» — только со счётом сверки и парой снимков
-    def tx(text):
-        return {'type': 'assistant', 'timestamp': iso(time.time() + 3), 'message': {'model': 'claude-opus-5', 'content': [{'type': 'text', 'text': text}]}}
-
     if os.path.isfile(os.path.join(r, '.claude', 'skills', 'clone-screen', 'SKILL.md')):
         S('копия: начало хода', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
         turn_with([tx('Карточка клиента сверена на глаз с эталоном, кнопки крупнее.')])

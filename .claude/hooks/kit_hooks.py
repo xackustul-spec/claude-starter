@@ -1851,6 +1851,28 @@ def clone_claim_msgs(data, root, since):
             '(pair.html: эталон слева, наш экран справа). Нет описи и пары — слова о совпадении убрать и сказать, что сделано на деле.']
 
 
+# ------------------------------------------- замер вёрстки: правили интерфейс — в ответе числа замера, и они нулевые
+# Урок 03.10.2026: правила вёрстки и проверяющий «глазами» не ловят наезды в 5–10 px; ловит только замер в браузере.
+MEASURE_LINE_RE = re.compile(r'замер\s+в[её]рстки\s*:([^\n]*)', re.I)
+MEASURE_NUM_RE = re.compile(r'(\d{3,4})\s*[—–-]\s*(\d+)')
+MEASURE_MISSING = 'Менялись файлы интерфейса (%s), а строки замера в ответе нет. Замер обязателен (скилл layout-check): открыть экран в браузере, выполнить .claude/skills/layout-check/layout-check.js на ширинах 320, 768 и 1280, исправить всё найденное и написать в ответе строку «Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0». Браузера нет — «Замер вёрстки: не выполнен — <почему>» первой строкой ответа, и экран владельцу не сдавать.'
+MEASURE_DIRTY = 'Замер вёрстки показал проблемы (%s), а ход заканчивается. Наезды, вылезания и обрезанный текст исправляются до сдачи: править общий стиль, замерить снова, пока не будет 0 на всех ширинах. Наложение задумано — пометить элемент data-overlap-ok и назвать его владельцу.'
+
+
+def layout_measure_msgs(data, root, since):
+    if not os.path.isfile(os.path.join(root, '.claude', 'skills', 'layout-check', 'layout-check.js')):
+        return []
+    uses, _, _ = turn_tools(str(data.get('transcript_path') or ''), since)
+    files, _ = ui_changes(uses)
+    if not files:
+        return []
+    m = MEASURE_LINE_RE.search(last_answer(str(data.get('transcript_path') or ''), since) or '')
+    if not m:
+        return [MEASURE_MISSING % ', '.join(files[:4])]
+    bad = ['%s — %s' % (w, n) for w, n in MEASURE_NUM_RE.findall(m.group(1)) if int(n) > 0]
+    return [MEASURE_DIRTY % ', '.join(bad)] if bad else []
+
+
 # ------------------------------------------- «Следующий шаг»: первый пункт — один
 def next_step_problem(root):
     try:
@@ -2034,7 +2056,8 @@ def check_docs(data):
     again = data.get('stop_hook_active') is True
     # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
     task_msgs = (main_task_check(data, root, since) + ui_check_msgs(data, root, since)
-                 + ([] if again else clone_claim_msgs(data, root, since) + lessons_block_msgs(data, root)))
+                 + ([] if again else layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
+                    + lessons_block_msgs(data, root)))
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
         if task_msgs:
