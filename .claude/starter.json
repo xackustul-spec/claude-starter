@@ -11,8 +11,8 @@
   ".claude/hooks/guard-instructions.ps1": "3e47bf07ce36e0e1",
   ".claude/hooks/guard-shell.ps1": "4eb653c5024fa7fb",
   ".claude/hooks/kit-version.ps1": "77ba8ba9624c4457",
-  ".claude/hooks/kit_common.ps1": "2a0ab4b8b0cc37d0",
-  ".claude/hooks/kit_hooks.py": "8f53ebb6ce4f1925",
+  ".claude/hooks/kit_common.ps1": "3ca4bfb63877d5ae",
+  ".claude/hooks/kit_hooks.py": "2cddd22e1abf8d2e",
   ".claude/hooks/pre-agent.ps1": "84aa7cb91ca7d103",
   ".claude/hooks/pre-read.ps1": "9bb179323b461cf6",
   ".claude/hooks/pre-write.ps1": "953524e3e2fbf9e0",
@@ -23,7 +23,7 @@
   ".claude/hooks/session-start.ps1": "576162ad0ce75a2c",
   ".claude/hooks/tests/cases.json": "39be7f0000a07757",
   ".claude/hooks/tests/ps_batch.ps1": "16038b2d2b4d9b0b",
-  ".claude/hooks/tests/run_tests.py": "0a37b1f08abb1d07",
+  ".claude/hooks/tests/run_tests.py": "4b0e1301d5d41881",
   ".claude/hooks/turn-start.ps1": "b74ff7ea72c2afc1",
   ".claude/rules/code-headers.md": "10d9a1f4300138ac",
   ".claude/rules/code.md": "71a104b62fd845e7",
@@ -75,5 +75,5 @@
  },
  "installed": "2026-10-03",
  "source": ".",
- "version": "2.33.1"
+ "version": "2.34.0"
 }
