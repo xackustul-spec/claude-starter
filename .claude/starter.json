@@ -33,7 +33,7 @@
   ".claude/rules/security.md": "1f57ba59216e0bdd",
   ".claude/rules/ui.md": "49b71a8316b7a11d",
   ".claude/settings.local.example.json": "55f692d7bb14e9a4",
-  ".claude/skills/clone-screen/SKILL.md": "f9bace06048d28c3",
+  ".claude/skills/clone-screen/SKILL.md": "ba6d26788b2c569e",
   ".claude/skills/compat-check/SKILL.md": "0ada265ab6422a3b",
   ".claude/skills/find-solution/SKILL.md": "c699568ac89d1274",
   ".claude/skills/fix-bug/SKILL.md": "d31626739702e07a",
@@ -75,5 +75,5 @@
  },
  "installed": "2026-10-03",
  "source": ".",
- "version": "2.34.0"
+ "version": "2.34.1"
 }
