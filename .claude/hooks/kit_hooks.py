@@ -1816,7 +1816,7 @@ def ui_check_msgs(data, root, since):
 # Урок 03.10.2026 (Bass): при 65 снимках эталона экран «сверили на глаз» по 8 и сдали как совпадающий — день впустую.
 CLONE_CLAIM_RE = re.compile(r'(?<!не )(соответству\w+\s+эталону|совпада\w+\s+с\s+эталоном|свер\w+\s+(на\s+глаз\s+)?с\s+эталоном|'
                             r'как\s+в\s+эталоне|точь-в-точь\s+как|один\s+в\s+один)', re.I)
-CLONE_SCORE_RE = re.compile(r'сверка\s*:?\s*(\d+)\s*из\s*(\d+)', re.I)
+CLONE_SCORE_RE = re.compile(r'сверка(?:\s+\w+)?\s*:?\s*(\d+)\s*из\s*(\d+)', re.I)
 CLONE_PAIR_RE = re.compile(r'pair[\w.-]*\.(html|png|jpe?g)', re.I)
 
 

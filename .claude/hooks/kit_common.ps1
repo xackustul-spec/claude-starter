@@ -1498,7 +1498,7 @@ function Get-UiCheckMsgs($data, [string]$root, [double]$since) {
 # ------------------------------------------- «как в эталоне» — только со сверкой по элементам и парой снимков
 # Урок 03.10.2026 (Bass): при 65 снимках эталона экран «сверили на глаз» по 8 и сдали как совпадающий — день впустую.
 $script:CloneClaimRe = '(?<!не )(соответству\w+\s+эталону|совпада\w+\s+с\s+эталоном|свер\w+\s+(на\s+глаз\s+)?с\s+эталоном|как\s+в\s+эталоне|точь-в-точь\s+как|один\s+в\s+один)'
-$script:CloneScoreRe = 'сверка\s*:?\s*(\d+)\s*из\s*(\d+)'
+$script:CloneScoreRe = 'сверка(?:\s+\w+)?\s*:?\s*(\d+)\s*из\s*(\d+)'
 $script:ClonePairRe = 'pair[\w.-]*\.(html|png|jpe?g)'
 function Get-CloneClaimMsgs($data, [string]$root, [double]$since) {
     if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path (Join-Path $root '.claude') 'skills') 'clone-screen') 'SKILL.md'))) { return @() }
