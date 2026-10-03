@@ -1,6 +1,6 @@
 // Назначение: замер вёрстки открытой страницы — находит наезды, вылезания и обрезанный текст числами, а не на глаз.
 // Запуск: выполнить этот файл целиком в странице (javascript_tool встроенного браузера, evaluate в Playwright
-// или chrome-devtools) на каждой ширине окна. Возвращает строку JSON: {width, problems, items:[{kind, a, b, by}]}.
+// или chrome-devtools) на каждой ширине окна (320, 768, 1280, 1920 и той, что сейчас у владельца). Возвращает строку JSON: {width, problems, items:[{kind, a, b, by}]}.
 // Ничего не меняет на странице. Намеренное наложение помечается в разметке атрибутом data-overlap-ok.
 (() => {
   const doc = document.documentElement, vw = doc.clientWidth, TOL = 2, items = [];
@@ -36,6 +36,9 @@
       const pr = rect(p), ps = cs(p);
       if (/visible/.test(ps.overflowX) && (r.right > pr.right + TOL || r.left < pr.left - TOL) && pr.width > 4)
         add('вылезает из своего блока', name(el), name(p), Math.round(Math.max(r.right - pr.right, pr.left - r.left)) + 'px');
+      // 3а. То же по высоте: блок ниже или выше границ родителя — он ляжет на то, что стоит следом.
+      if (/visible/.test(ps.overflowY) && !/inline$/.test(s.display) && pr.height > 4 && (r.bottom > pr.bottom + TOL + 1 || r.top < pr.top - TOL - 1))
+        add('вылезает из своего блока по высоте', name(el), name(p), Math.round(Math.max(r.bottom - pr.bottom, pr.top - r.top)) + 'px');
     }
     // 4. Текст не помещается: обрезан без многоточия или выливается наружу.
     const ownText = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
@@ -68,6 +71,17 @@
   for (const f of floats) for (const [b, rb] of boxes) {
     if (f.contains(b) || b.contains(f) || !f.parentElement.contains(b)) continue;
     const c = cut(rect(f), rb); if (c && c[0] > 3 && c[1] > 3) add('значок или бейдж закрывает надпись', name(f), name(b), c[0] + '×' + c[1] + 'px');
+  }
+  // 8. Любые два блока с содержимым и своим фоном или рамкой, не вложенные друг в друга, перекрываются —
+  //    где бы они ни стояли в разметке (карточка легла на вкладки, панель на таблицу).
+  const pinned = el => { for (let p = el; p && p !== document.body; p = p.parentElement) if (/fixed|sticky/.test(cs(p).position)) return true; return false; };
+  const painted = all.filter(el => { if (okFlag(el) || pinned(el) || !(el.innerText || '').trim()) return false;
+    const s = cs(el), bg = s.backgroundColor, r = rect(el);
+    return r.width < vw * 0.98 && ((bg && !/rgba\(0, 0, 0, 0\)|transparent/.test(bg)) || parseFloat(s.borderTopWidth) + parseFloat(s.borderLeftWidth) > 0 || s.boxShadow !== 'none'); }).slice(0, 400);
+  for (let i = 0; i < painted.length; i++) for (let j = i + 1; j < painted.length; j++) {
+    const a = painted[i], b = painted[j];
+    if (a.contains(b) || b.contains(a)) continue;
+    const c = cut(rect(a), rect(b)); if (c && c[0] > 3 && c[1] > 3) add('блок лежит на другом блоке', name(a), name(b), c[0] + '×' + c[1] + 'px');
   }
   return JSON.stringify({ width: vw, problems: items.length, items });
 })()

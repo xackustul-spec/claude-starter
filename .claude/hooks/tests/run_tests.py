@@ -596,18 +596,22 @@ def scenarios(impl, ps, tmp):
     def tx(text):
         return {'type': 'assistant', 'timestamp': iso(time.time() + 3), 'message': {'model': 'claude-opus-5', 'content': [{'type': 'text', 'text': text}]}}
 
-    edit_ui = [tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}),
-               tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'})]
+    def edit_ui():  # метки времени — свежие на каждый ход, иначе вызовы окажутся «до начала хода»
+        return [tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}),
+                tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'})]
     has_measure = os.path.isfile(os.path.join(r, '.claude', 'skills', 'layout-check', 'layout-check.js'))
-    turn_with(edit_ui + [tx('Карта поправлена. Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0.')])
+    turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0, 1920 — 0.')])
     S('интерфейс: проверяющий ходил, замер нулевой — молчит', 'check-docs', d10t, r, 'allow')
     if has_measure:
         S('замер: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
-        turn_with(edit_ui + [tx('Карта поправлена, отступы выровнены.')])
+        turn_with(edit_ui() + [tx('Карта поправлена, отступы выровнены.')])
         S('замер: правили экран, строки замера нет — вернуть', 'check-docs', d10t, r, 'block', 'строки замера')
         S('замер: начало хода 2', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
-        turn_with(edit_ui + [tx('Карта поправлена. Замер вёрстки: 320 — 3, 768 — 0, 1280 — 0.')])
+        turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 320 — 3, 768 — 0, 1280 — 0, 1920 — 0.')])
         S('замер: есть проблемы на 320 — вернуть', 'check-docs', d10t, r, 'block', '320 — 3')
+        S('замер: начало хода 2а', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
+        turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 1280 — 0.')])
+        S('замер: одна ширина вместо четырёх — вернуть', 'check-docs', d10t, r, 'block', 'строки замера')
         S('замер: начало хода 3', 'turn-start', dict(d10t, prompt='объясни карту'), r, 'ctx')
         turn_with([tx('Карта строится из таблицы позиций.')])
         S('замер: интерфейс не правили — молчит', 'check-docs', d10t, r, 'allow')
@@ -767,6 +771,10 @@ def scenarios(impl, ps, tmp):
       env={'CLAUDE_TRUST_LEVEL': 'full'})
     S('стиль: ширина в css — памятка', 'check-python',
       {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/app/static/app.css', 'old_string': '.mtab{}', 'new_string': '.mtab{ width: 62px; color: red }'}}, r, 'block', 'размер/положение: width')
+    S('стиль: отрицательный margin и подпись в процентах — запрет назван', 'check-python',
+      {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/app/static/app.css', 'old_string': '.pt{}', 'new_string': '.pt{ position: absolute; left: 45.7%; margin-top: -18px }'}}, r, 'block', 'положение в процентах')
+    S('стиль: высота блока в px — запрет назван', 'check-python',
+      {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/app/static/app.css', 'old_string': '.card{}', 'new_string': '.card{ height: 356px; width: 320px }'}}, r, 'block', 'только min-height')
     S('стиль: цвет без размера — молчит', 'check-python',
       {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/app/static/app.css', 'old_string': 'a', 'new_string': '.x{ color: red; background: var(--bg) }'}}, r, 'allow')
     S('стиль: значение из темы — молчит', 'check-python',

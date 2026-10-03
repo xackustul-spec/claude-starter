@@ -1018,6 +1018,10 @@ LAYOUT_PROP_RE = re.compile(r'(?<![\w-])(width|min-width|max-width|height|min-he
                             r'top|left|right|bottom|white-space|font-size)\s*:', re.I)
 STYLE_EXT = ('.css', '.scss', '.sass', '.less', '.html', '.htm', '.vue', '.svelte', '.tsx', '.jsx')
 
+# Конструкции, из которых получаются наезды: ловятся в момент записи, а не на экране владельца.
+LAYOUT_BAN = [(re.compile(rx, re.I), msg) for rx, msg in [('margin[\\w-]*\\s*:[^;{}]*(?<![\\w(.])-\\d', 'отрицательный margin — расстояния делаются gap и padding'), ('(?<![\\w-])(left|right|top|bottom)\\s*:\\s*\\d+(\\.\\d+)?%', 'положение в процентах — подписи и блоки ставит flex/grid, а не left: N%'), ('(?<![\\w-])height\\s*:\\s*\\d{2,}px', 'height в px — у блока с текстом только min-height (px допустим значку и аватару)'), ('(?<![\\w-])width\\s*:\\s*\\d{3,}px', 'жёсткая ширина контейнера в px — нужны %, fr, minmax(), max-width'), ('position\\s*:\\s*absolute', 'position: absolute — только значку в углу, с местом под него в родителе; текст и данные так не ставятся')]]
+LAYOUT_BAN_TAIL = ' Запрещено правилами вёрстки (.claude/rules/layout.md) — переписать сейчас, до следующего шага: '
+
 
 def layout_guard(data):
     # Write/Edit в файл стиля или разметки добавляет размер/положение — вернуть памятку: где ещё этот
@@ -1039,7 +1043,9 @@ def layout_guard(data):
     if not hits:
         return
     hits = sorted(set(hits))[:6]
-    block(['В ' + os.path.basename(path) + ' добавлено размер/положение: ' + ', '.join(hits) + '. Перед тем как идти дальше: '
+    banned = [msg for rx, msg in LAYOUT_BAN if rx.search(added)]
+    ban = (LAYOUT_BAN_TAIL + '; '.join(banned) + '.') if banned else ''
+    block(['В ' + os.path.basename(path) + ' добавлено размер/положение: ' + ', '.join(hits) + '.' + ban + ' Перед тем как идти дальше: '
            '1) grep — где ещё применяется этот селектор/класс и на каких страницах; общий элемент — править в общем '
            'месте (тема, общий класс), не в экране; 2) значение из темы или из документа вида, не «сырое» число; '
            '3) снимок до/после на КАЖДОЙ странице с этим элементом и на 320 px — ничего не наезжает, не обрезано, '
@@ -1855,7 +1861,7 @@ def clone_claim_msgs(data, root, since):
 # Урок 03.10.2026: правила вёрстки и проверяющий «глазами» не ловят наезды в 5–10 px; ловит только замер в браузере.
 MEASURE_LINE_RE = re.compile(r'замер\s+в[её]рстки\s*:([^\n]*)', re.I)
 MEASURE_NUM_RE = re.compile(r'(\d{3,4})\s*[—–-]\s*(\d+)')
-MEASURE_MISSING = 'Менялись файлы интерфейса (%s), а строки замера в ответе нет. Замер обязателен (скилл layout-check): открыть экран в браузере, выполнить .claude/skills/layout-check/layout-check.js на ширинах 320, 768 и 1280, исправить всё найденное и написать в ответе строку «Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0». Браузера нет — «Замер вёрстки: не выполнен — <почему>» первой строкой ответа, и экран владельцу не сдавать.'
+MEASURE_MISSING = 'Менялись файлы интерфейса (%s), а строки замера в ответе нет. Замер обязателен (скилл layout-check): открыть экран в браузере, выполнить .claude/skills/layout-check/layout-check.js на ширинах 320, 768, 1280 и 1920, исправить всё найденное и написать в ответе строку «Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0, 1920 — 0». Браузера нет — «Замер вёрстки: не выполнен — <почему>» первой строкой ответа, и экран владельцу не сдавать.'
 MEASURE_DIRTY = 'Замер вёрстки показал проблемы (%s), а ход заканчивается. Наезды, вылезания и обрезанный текст исправляются до сдачи: править общий стиль, замерить снова, пока не будет 0 на всех ширинах. Наложение задумано — пометить элемент data-overlap-ok и назвать его владельцу.'
 
 
@@ -1869,7 +1875,10 @@ def layout_measure_msgs(data, root, since):
     m = MEASURE_LINE_RE.search(last_answer(str(data.get('transcript_path') or ''), since) or '')
     if not m:
         return [MEASURE_MISSING % ', '.join(files[:4])]
-    bad = ['%s — %s' % (w, n) for w, n in MEASURE_NUM_RE.findall(m.group(1)) if int(n) > 0]
+    nums = MEASURE_NUM_RE.findall(m.group(1))
+    if len(nums) < 4 and not re.search(r'не\s+выполнен', m.group(1), re.I):
+        return [MEASURE_MISSING % ', '.join(files[:4])]
+    bad = ['%s — %s' % (w, n) for w, n in nums if int(n) > 0]
     return [MEASURE_DIRTY % ', '.join(bad)] if bad else []
 
 

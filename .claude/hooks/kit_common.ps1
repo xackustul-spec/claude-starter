@@ -823,6 +823,15 @@ function Test-Ps1Bom([string]$path) {
 }
 $script:LayoutPropRe = '(?<![\w-])(width|min-width|max-width|height|min-height|max-height|margin(-\w+)?|padding(-\w+)?|position|z-index|float|overflow(-\w+)?|display|flex(-\w+)?|grid(-\w+)?|top|left|right|bottom|white-space|font-size)\s*:'
 $script:StyleExt = @('.css', '.scss', '.sass', '.less', '.html', '.htm', '.vue', '.svelte', '.tsx', '.jsx')
+# Конструкции, из которых получаются наезды: ловятся в момент записи, а не на экране владельца.
+$script:LayoutBan = @(
+    @('margin[\w-]*\s*:[^;{}]*(?<![\w(.])-\d', 'отрицательный margin — расстояния делаются gap и padding'),
+    @('(?<![\w-])(left|right|top|bottom)\s*:\s*\d+(\.\d+)?%', 'положение в процентах — подписи и блоки ставит flex/grid, а не left: N%'),
+    @('(?<![\w-])height\s*:\s*\d{2,}px', 'height в px — у блока с текстом только min-height (px допустим значку и аватару)'),
+    @('(?<![\w-])width\s*:\s*\d{3,}px', 'жёсткая ширина контейнера в px — нужны %, fr, minmax(), max-width'),
+    @('position\s*:\s*absolute', 'position: absolute — только значку в углу, с местом под него в родителе; текст и данные так не ставятся')
+)
+$script:LayoutBanTail = ' Запрещено правилами вёрстки (.claude/rules/layout.md) — переписать сейчас, до следующего шага: '
 function Invoke-LayoutGuard($data) {
     # Write/Edit в файл стиля или разметки добавляет размер/положение — вернуть памятку (см. kit_hooks.py).
     $ti = Get-Prop $data 'tool_input'
@@ -843,7 +852,9 @@ function Invoke-LayoutGuard($data) {
     }
     if ($hits.Count -eq 0) { return }
     $list = @($hits.Keys | Sort-Object | Select-Object -First 6) -join ', '
-    Out-Block @('В ' + [System.IO.Path]::GetFileName($path) + ' добавлено размер/положение: ' + $list + '. Перед тем как идти дальше: 1) grep — где ещё применяется этот селектор/класс и на каких страницах; общий элемент — править в общем месте (тема, общий класс), не в экране; 2) значение из темы или из документа вида, не «сырое» число; 3) снимок до/после на КАЖДОЙ странице с этим элементом и на 320 px — ничего не наезжает, не обрезано, не уехало, длинные слова переносятся, таблица в .table-wrap; 4) владелец не называл этот размер — не добавлять, вернуть как было. Проверил — продолжай.')
+    $banned = @(); foreach ($b in $script:LayoutBan) { if ([regex]::IsMatch($added, $b[0], 'IgnoreCase')) { $banned += $b[1] } }
+    $ban = ''; if ($banned.Count -gt 0) { $ban = $script:LayoutBanTail + ($banned -join '; ') + '.' }
+    Out-Block @('В ' + [System.IO.Path]::GetFileName($path) + ' добавлено размер/положение: ' + $list + '.' + $ban + ' Перед тем как идти дальше: 1) grep — где ещё применяется этот селектор/класс и на каких страницах; общий элемент — править в общем месте (тема, общий класс), не в экране; 2) значение из темы или из документа вида, не «сырое» число; 3) снимок до/после на КАЖДОЙ странице с этим элементом и на 320 px — ничего не наезжает, не обрезано, не уехало, длинные слова переносятся, таблица в .table-wrap; 4) владелец не называл этот размер — не добавлять, вернуть как было. Проверил — продолжай.')
 }
 function Invoke-CheckPython($data) {
     $path = [string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')
@@ -1526,7 +1537,7 @@ function Get-CloneClaimMsgs($data, [string]$root, [double]$since) {
 # Урок 03.10.2026: правила вёрстки и проверяющий «глазами» не ловят наезды в 5–10 px; ловит только замер в браузере.
 $script:MeasureLineRe = 'замер\s+в[её]рстки\s*:([^\n]*)'
 $script:MeasureNumRe = '(\d{3,4})\s*[—–-]\s*(\d+)'
-$script:MeasureMissing = 'Менялись файлы интерфейса (%s), а строки замера в ответе нет. Замер обязателен (скилл layout-check): открыть экран в браузере, выполнить .claude/skills/layout-check/layout-check.js на ширинах 320, 768 и 1280, исправить всё найденное и написать в ответе строку «Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0». Браузера нет — «Замер вёрстки: не выполнен — <почему>» первой строкой ответа, и экран владельцу не сдавать.'
+$script:MeasureMissing = 'Менялись файлы интерфейса (%s), а строки замера в ответе нет. Замер обязателен (скилл layout-check): открыть экран в браузере, выполнить .claude/skills/layout-check/layout-check.js на ширинах 320, 768, 1280 и 1920, исправить всё найденное и написать в ответе строку «Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0, 1920 — 0». Браузера нет — «Замер вёрстки: не выполнен — <почему>» первой строкой ответа, и экран владельцу не сдавать.'
 $script:MeasureDirty = 'Замер вёрстки показал проблемы (%s), а ход заканчивается. Наезды, вылезания и обрезанный текст исправляются до сдачи: править общий стиль, замерить снова, пока не будет 0 на всех ширинах. Наложение задумано — пометить элемент data-overlap-ok и назвать его владельцу.'
 function Get-LayoutMeasureMsgs($data, [string]$root, [double]$since) {
     if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path (Join-Path $root '.claude') 'skills') 'layout-check') 'layout-check.js'))) { return @() }
@@ -1536,8 +1547,11 @@ function Get-LayoutMeasureMsgs($data, [string]$root, [double]$since) {
     $ans = [string](Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since)
     $m = [regex]::Match($ans, $script:MeasureLineRe, 'IgnoreCase')
     if (-not $m.Success) { return @($script:MeasureMissing.Replace('%s', (($ch.files | Select-Object -First 4) -join ', '))) }
+    $nums = [regex]::Matches($m.Groups[1].Value, $script:MeasureNumRe)
+    $skipped = [regex]::IsMatch([string]$m.Groups[1].Value, 'не\s+выполнен', 'IgnoreCase')
+    if ((@($nums).Count -lt 4) -and (-not $skipped)) { return @($script:MeasureMissing.Replace('%s', (($ch.files | Select-Object -First 4) -join ', '))) }
     $bad = @()
-    foreach ($x in [regex]::Matches($m.Groups[1].Value, $script:MeasureNumRe)) { if ([int]$x.Groups[2].Value -gt 0) { $bad += ($x.Groups[1].Value + ' — ' + $x.Groups[2].Value) } }
+    foreach ($x in $nums) { if ([int]$x.Groups[2].Value -gt 0) { $bad += ($x.Groups[1].Value + ' — ' + $x.Groups[2].Value) } }
     if ($bad.Count -gt 0) { return @($script:MeasureDirty.Replace('%s', ($bad -join ', '))) }
     return @()
 }
