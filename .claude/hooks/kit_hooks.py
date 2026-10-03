@@ -1812,6 +1812,31 @@ def ui_check_msgs(data, root, since):
             'браузера нет — сказать владельцу первой строкой.' % ', '.join(files[:4])]
 
 
+# ------------------------------------------- «как в эталоне» — только со сверкой по элементам и парой снимков
+# Урок 03.10.2026 (Bass): при 65 снимках эталона экран «сверили на глаз» по 8 и сдали как совпадающий — день впустую.
+CLONE_CLAIM_RE = re.compile(r'(?<!не )(соответству\w+\s+эталону|совпада\w+\s+с\s+эталоном|свер\w+\s+(на\s+глаз\s+)?с\s+эталоном|'
+                            r'как\s+в\s+эталоне|точь-в-точь\s+как|один\s+в\s+один)', re.I)
+CLONE_SCORE_RE = re.compile(r'сверка\s*:?\s*(\d+)\s*из\s*(\d+)', re.I)
+CLONE_PAIR_RE = re.compile(r'pair[\w.-]*\.(html|png|jpe?g)', re.I)
+
+
+def clone_claim_msgs(data, root, since):
+    if not os.path.isfile(os.path.join(root, '.claude', 'skills', 'clone-screen', 'SKILL.md')):
+        return []
+    ans = last_answer(str(data.get('transcript_path') or ''), since)
+    if not ans or not CLONE_CLAIM_RE.search(ans):
+        return []
+    m = CLONE_SCORE_RE.search(ans)
+    if m and CLONE_PAIR_RE.search(ans):
+        if int(m.group(1)) >= int(m.group(2)):
+            return []
+        return ['В ответе сказано, что экран как в эталоне, а сверка — %s из %s. Это не совпадение: убрать слова о '
+                'совпадении и перечислить, каких элементов нет и почему, либо доделать (скилл clone-screen).' % (m.group(1), m.group(2))]
+    return ['В ответе сказано, что экран как в эталоне, но нет доказательства. Нужно (скилл clone-screen): строка '
+            '«Сверка: N из M» — счёт элементов из описи эталона по таблице проверяющего — и путь к паре снимков '
+            '(pair.html: эталон слева, наш экран справа). Нет описи и пары — слова о совпадении убрать и сказать, что сделано на деле.']
+
+
 # ------------------------------------------- «Следующий шаг»: первый пункт — один
 def next_step_problem(root):
     try:
@@ -1992,7 +2017,8 @@ def check_docs(data):
     since = float((snap or {}).get('ts') or 0) - 1.0
     again = data.get('stop_hook_active') is True
     # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
-    task_msgs = main_task_check(data, root, since) + ui_check_msgs(data, root, since) + ([] if again else lessons_block_msgs(data, root))
+    task_msgs = (main_task_check(data, root, since) + ui_check_msgs(data, root, since)
+                 + ([] if again else clone_claim_msgs(data, root, since) + lessons_block_msgs(data, root)))
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
         if task_msgs:

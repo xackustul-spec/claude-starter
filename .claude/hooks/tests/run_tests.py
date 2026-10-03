@@ -593,6 +593,24 @@ def scenarios(impl, ps, tmp):
     turn_with([tu('Bash', {'command': 'ssh host cat app/rivals-map.tsx'})])
     S('интерфейс: только чтение .tsx — молчит', 'check-docs', d10t, r, 'allow')
 
+    # «как в эталоне» — только со счётом сверки и парой снимков
+    def tx(text):
+        return {'type': 'assistant', 'timestamp': iso(time.time() + 3), 'message': {'model': 'claude-opus-5', 'content': [{'type': 'text', 'text': text}]}}
+
+    if os.path.isfile(os.path.join(r, '.claude', 'skills', 'clone-screen', 'SKILL.md')):
+        S('копия: начало хода', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        turn_with([tx('Карточка клиента сверена на глаз с эталоном, кнопки крупнее.')])
+        S('копия: «сверена с эталоном» без счёта и пары — вернуть', 'check-docs', d10t, r, 'block', 'Сверка: N из M')
+        S('копия: начало хода 2', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        turn_with([tx('Карточка соответствует эталону. Сверка: 14 из 21, пара docs/ai/previews/card/pair.html')])
+        S('копия: счёт неполный, а сказано «соответствует» — вернуть', 'check-docs', d10t, r, 'block', '14 из 21')
+        S('копия: начало хода 3', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        turn_with([tx('Карточка соответствует эталону. Сверка: 21 из 21, пара docs/ai/previews/card/pair.html')])
+        S('копия: полный счёт и пара — молчит', 'check-docs', d10t, r, 'allow')
+        S('копия: начало хода 4', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        turn_with([tx('Карточка пока не соответствует эталону: нет блока платежей.')])
+        S('копия: «не соответствует» — молчит', 'check-docs', d10t, r, 'allow')
+
     # переросший файл кода — раз за сеанс
     rb = new_project(tmp, f'{impl}-s-big')
     git(rb, 'init', '-q'); git(rb, 'add', '-A'); git(rb, 'commit', '-qm', 'init')

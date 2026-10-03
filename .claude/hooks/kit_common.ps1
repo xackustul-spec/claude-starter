@@ -1495,6 +1495,22 @@ function Get-UiCheckMsgs($data, [string]$root, [double]$since) {
     if ($ch.files.Count -eq 0 -or $ch.checked) { return @() }
     return @('Менялись файлы интерфейса (' + (($ch.files | Select-Object -First 4) -join ', ') + '), а проверяющий ui-checker не ходил. Отправь его сейчас субагентом (Agent, ui-checker): сверить экран с эталоном в браузере, итог одной строкой; расхождение — переделать; браузера нет — сказать владельцу первой строкой.')
 }
+# ------------------------------------------- «как в эталоне» — только со сверкой по элементам и парой снимков
+# Урок 03.10.2026 (Bass): при 65 снимках эталона экран «сверили на глаз» по 8 и сдали как совпадающий — день впустую.
+$script:CloneClaimRe = '(?<!не )(соответству\w+\s+эталону|совпада\w+\s+с\s+эталоном|свер\w+\s+(на\s+глаз\s+)?с\s+эталоном|как\s+в\s+эталоне|точь-в-точь\s+как|один\s+в\s+один)'
+$script:CloneScoreRe = 'сверка\s*:?\s*(\d+)\s*из\s*(\d+)'
+$script:ClonePairRe = 'pair[\w.-]*\.(html|png|jpe?g)'
+function Get-CloneClaimMsgs($data, [string]$root, [double]$since) {
+    if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path (Join-Path $root '.claude') 'skills') 'clone-screen') 'SKILL.md'))) { return @() }
+    $ans = Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since
+    if ([string]::IsNullOrEmpty($ans) -or -not [regex]::IsMatch($ans, $script:CloneClaimRe, 'IgnoreCase')) { return @() }
+    $m = [regex]::Match($ans, $script:CloneScoreRe, 'IgnoreCase')
+    if ($m.Success -and [regex]::IsMatch($ans, $script:ClonePairRe, 'IgnoreCase')) {
+        if ([int]$m.Groups[1].Value -ge [int]$m.Groups[2].Value) { return @() }
+        return @('В ответе сказано, что экран как в эталоне, а сверка — ' + $m.Groups[1].Value + ' из ' + $m.Groups[2].Value + '. Это не совпадение: убрать слова о совпадении и перечислить, каких элементов нет и почему, либо доделать (скилл clone-screen).')
+    }
+    return @('В ответе сказано, что экран как в эталоне, но нет доказательства. Нужно (скилл clone-screen): строка «Сверка: N из M» — счёт элементов из описи эталона по таблице проверяющего — и путь к паре снимков (pair.html: эталон слева, наш экран справа). Нет описи и пары — слова о совпадении убрать и сказать, что сделано на деле.')
+}
 # ------------------------------------------- «Следующий шаг»: первый пункт — один
 function Get-NextStepProblem([string]$root) {
     $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
@@ -1726,7 +1742,7 @@ function Invoke-CheckDocs($data) {
     $since = -1.0
     if ($snap) { try { $since = [double](Get-Prop $snap 'ts') - 1.0 } catch { $since = -1.0 } }
     $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
-    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-LessonsBlockMsgs $data $root) }
+    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
     $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {
