@@ -1824,12 +1824,21 @@ CLONE_CLAIM_RE = re.compile(r'(?<!не )(соответству\w+\s+этало�
 CLONE_SCORE_RE = re.compile(r'сверка(?:\s+\w+)?\s*:?\s*(\d+)\s*из\s*(\d+)', re.I)
 CLONE_PAIR_RE = re.compile(r'pair[\w.-]*\.(html|png|jpe?g)', re.I)
 
+CLONE_DELIVER_RE = re.compile('(экран|карточк|страниц|шаблон|макет|тем[ауы]|структур|вкладк|дашборд)\\w*[^.\\n]{0,80}(готов|сделан|собран|включ[её]н|перенес[её]н|на\\s+месте)|можно\\s+(смотреть|проверять|открывать)|посмотрите|откройте|проверьте|принимайте|сдаю', re.I)
+CLONE_DELIVER_MSG = 'Идёт копия по эталону (есть docs/ai/specs/ui/ETALON.md), в ответе экран сдаётся владельцу, а пары снимков нет. Сдавать можно только так (скилл clone-screen, п. 5): открыть свой экран в браузере, снять его, собрать пару (pair.html: эталон слева, наш экран справа), в ответе — строка «Сверка: N из M» и путь к паре. Экран не открывается или показывает старое — это и сказать первой строкой, а не «готово». В этом ходе экран не сдаётся — убрать слова о готовности.'
+
 
 def clone_claim_msgs(data, root, since):
     if not os.path.isfile(os.path.join(root, '.claude', 'skills', 'clone-screen', 'SKILL.md')):
         return []
     ans = last_answer(str(data.get('transcript_path') or ''), since)
-    if not ans or not CLONE_CLAIM_RE.search(ans):
+    if not ans:
+        return []
+    if not CLONE_CLAIM_RE.search(ans):
+        # Сдача экрана без слов о совпадении («структура собрана, откройте») — тоже только с парой.
+        if (os.path.isfile(os.path.join(root, 'docs', 'ai', 'specs', 'ui', 'ETALON.md')) and CLONE_DELIVER_RE.search(ans)
+                and not (CLONE_SCORE_RE.search(ans) and CLONE_PAIR_RE.search(ans))):
+            return [CLONE_DELIVER_MSG]
         return []
     m = CLONE_SCORE_RE.search(ans)
     if m and CLONE_PAIR_RE.search(ans):

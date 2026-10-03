@@ -1502,10 +1502,19 @@ function Get-UiCheckMsgs($data, [string]$root, [double]$since) {
 $script:CloneClaimRe = '(?<!не )(соответству\w+\s+эталону|совпада\w+\s+с\s+эталоном|свер\w+\s+(на\s+глаз\s+)?с\s+эталоном|как\s+в\s+эталоне|точь-в-точь\s+как|один\s+в\s+один)'
 $script:CloneScoreRe = 'сверка(?:\s+\w+)?\s*:?\s*(\d+)\s*из\s*(\d+)'
 $script:ClonePairRe = 'pair[\w.-]*\.(html|png|jpe?g)'
+$script:CloneDeliverRe = '(экран|карточк|страниц|шаблон|макет|тем[ауы]|структур|вкладк|дашборд)\w*[^.\n]{0,80}(готов|сделан|собран|включ[её]н|перенес[её]н|на\s+месте)|можно\s+(смотреть|проверять|открывать)|посмотрите|откройте|проверьте|принимайте|сдаю'
+$script:CloneDeliverMsg = 'Идёт копия по эталону (есть docs/ai/specs/ui/ETALON.md), в ответе экран сдаётся владельцу, а пары снимков нет. Сдавать можно только так (скилл clone-screen, п. 5): открыть свой экран в браузере, снять его, собрать пару (pair.html: эталон слева, наш экран справа), в ответе — строка «Сверка: N из M» и путь к паре. Экран не открывается или показывает старое — это и сказать первой строкой, а не «готово». В этом ходе экран не сдаётся — убрать слова о готовности.'
 function Get-CloneClaimMsgs($data, [string]$root, [double]$since) {
     if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path (Join-Path $root '.claude') 'skills') 'clone-screen') 'SKILL.md'))) { return @() }
     $ans = Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since
-    if ([string]::IsNullOrEmpty($ans) -or -not [regex]::IsMatch($ans, $script:CloneClaimRe, 'IgnoreCase')) { return @() }
+    if ([string]::IsNullOrEmpty($ans)) { return @() }
+    if (-not [regex]::IsMatch($ans, $script:CloneClaimRe, 'IgnoreCase')) {
+        # Сдача экрана без слов о совпадении («структура собрана, откройте») — тоже только с парой.
+        $etalon = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'specs') 'ui') 'ETALON.md'
+        $proved = ([regex]::IsMatch($ans, $script:CloneScoreRe, 'IgnoreCase') -and [regex]::IsMatch($ans, $script:ClonePairRe, 'IgnoreCase'))
+        if ([System.IO.File]::Exists($etalon) -and [regex]::IsMatch($ans, $script:CloneDeliverRe, 'IgnoreCase') -and -not $proved) { return @($script:CloneDeliverMsg) }
+        return @()
+    }
     $m = [regex]::Match($ans, $script:CloneScoreRe, 'IgnoreCase')
     if ($m.Success -and [regex]::IsMatch($ans, $script:ClonePairRe, 'IgnoreCase')) {
         if ([int]$m.Groups[1].Value -ge [int]$m.Groups[2].Value) { return @() }
