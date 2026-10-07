@@ -2131,6 +2131,29 @@ def stop_block(data, snap, lines, again=False):
     block(lines)
 
 
+# ------------------------------------------- «сделано» = владелец может увидеть: строка «Где смотреть»
+WHERE_RE = re.compile(r'где\s+смотреть\s*:', re.I)
+WHERE_MSG = 'В этом ходе правился код, а в ответе нет строки «Где смотреть: …». Владелец смотрит результат на своём экране и не видит правок, которые лежат только в файлах или в тестовой копии. Последней строкой ответа написать одно из трёх: «Где смотреть: <адрес или экран> — изменение уже там» / «Где смотреть: пока нигде — правка только в файлах, чтобы увидеть: <что сделать или сказать>» / «Где смотреть: <адрес тестовой копии> — на боевом ещё нет». Слово «сделано» без этого — обман: для владельца сделано то, что он может увидеть. Не видишь результат сам — попросить доступ, не гадать.'
+
+
+def where_msgs(data, since):
+    uses, _, _ = turn_tools(str(data.get('transcript_path') or ''), since)
+    code = False
+    for name, inp, ts in uses.values():
+        inp = inp if isinstance(inp, dict) else {}
+        path = str(inp.get('file_path') or inp.get('notebook_path') or '')
+        if name in ('Write', 'Edit', 'MultiEdit', 'NotebookEdit') and path and not DOC_PATH_RE.search(path) \
+                and '/.claude/' not in path.replace('\\', '/'):
+            code = True
+            break
+    if not code:
+        return []
+    ans = last_answer(str(data.get('transcript_path') or ''), since)
+    if not ans or WHERE_RE.search(ans):
+        return []
+    return [WHERE_MSG]
+
+
 def check_docs(data):
     root = project_dir(data)
     write_timing(data, root)
@@ -2142,13 +2165,13 @@ def check_docs(data):
     again = data.get('stop_hook_active') is True
     if fast_turn(snap):
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG]
+        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since)
         if msgs:
             stop_block(data, snap, ['Перед завершением: ' + ' '.join(msgs)], again)
         return
     # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
     task_msgs = (main_task_check(data, root, since) + ui_check_msgs(data, root, since)
-                 + ([] if again else layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
+                 + ([] if again else where_msgs(data, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
                     + lessons_block_msgs(data, root)))
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:

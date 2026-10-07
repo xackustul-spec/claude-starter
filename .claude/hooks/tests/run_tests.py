@@ -604,7 +604,7 @@ def scenarios(impl, ps, tmp):
         return [tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}),
                 tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'})]
     has_measure = os.path.isfile(os.path.join(r, '.claude', 'skills', 'layout-check', 'layout-check.js'))
-    turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0, 1920 — 0.')])
+    turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0, 1920 — 0. Где смотреть: /rivals — уже там.')])
     S('интерфейс: проверяющий ходил, замер нулевой — молчит', 'check-docs', d10t, r, 'allow')
     if has_measure:
         S('замер: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
@@ -627,6 +627,9 @@ def scenarios(impl, ps, tmp):
     FAST = {'CLAUDE_KIT_MODE': ''}
     S('быстро: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx', env=FAST)
     turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена.')])
+    S('быстро: код правили, строки «Где смотреть» нет — вернуть', 'check-docs', d10t, r, 'block', 'Где смотреть', env=FAST)
+    S('быстро: начало хода 1а', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx', env=FAST)
+    turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена. Где смотреть: пока нигде — правка только в файлах, скажите «выложи».')])
     S('быстро: экран правили, проверяющего и замера нет — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
     S('быстро: ширина в css — без памятки', 'check-python',
       dict(d10t, tool_name='Edit', tool_input={'file_path': r + '/app/static/app.css', 'old_string': '.mtab{}', 'new_string': '.mtab{ min-width: 62px }'}), r, 'allow', env=FAST)

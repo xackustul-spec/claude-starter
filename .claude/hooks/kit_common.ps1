@@ -1820,6 +1820,21 @@ function Out-StopBlock($data, $snap, [string[]]$lines, [bool]$again = $false) {
     try { (@{ ts = $ts; n = 1 } | ConvertTo-Json -Compress) | Set-Content -LiteralPath $p -Encoding UTF8 } catch {}
     Out-Block $lines
 }
+# ------------------------------------------- «сделано» = владелец может увидеть: строка «Где смотреть»
+$script:WhereMsg = 'В этом ходе правился код, а в ответе нет строки «Где смотреть: …». Владелец смотрит результат на своём экране и не видит правок, которые лежат только в файлах или в тестовой копии. Последней строкой ответа написать одно из трёх: «Где смотреть: <адрес или экран> — изменение уже там» / «Где смотреть: пока нигде — правка только в файлах, чтобы увидеть: <что сделать или сказать>» / «Где смотреть: <адрес тестовой копии> — на боевом ещё нет». Слово «сделано» без этого — обман: для владельца сделано то, что он может увидеть. Не видишь результат сам — попросить доступ, не гадать.'
+function Get-WhereMsgs($data, [double]$since) {
+    $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) $since
+    $code = $false
+    foreach ($u in @($tt.uses)) {
+        if ($null -eq $u) { continue }
+        $path = [string](Get-Prop $u.Input 'file_path'); if (-not $path) { $path = [string](Get-Prop $u.Input 'notebook_path') }
+        if (($u.Name -in @('Write', 'Edit', 'MultiEdit', 'NotebookEdit')) -and $path -and (-not [regex]::IsMatch($path, $script:DocPathRe, 'IgnoreCase')) -and (($path -replace '\\', '/').IndexOf('/.claude/') -lt 0)) { $code = $true; break }
+    }
+    if (-not $code) { return @() }
+    $ans = [string](Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since)
+    if ((-not $ans) -or [regex]::IsMatch($ans, 'где\s+смотреть\s*:', 'IgnoreCase')) { return @() }
+    return @($script:WhereMsg)
+}
 function Invoke-CheckDocs($data) {
     $root = Get-ProjectDir $data
     Write-Timing $data $root
@@ -1830,11 +1845,11 @@ function Invoke-CheckDocs($data) {
     $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
     if (Test-FastTurn $snap) {
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) }
+        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) }
         if ($fm.Count -gt 0) { Out-StopBlock $data $snap @('Перед завершением: ' + ($fm -join ' ')) $again }
         return
     }
-    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
+    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
     $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {
