@@ -77,7 +77,8 @@ def static_ps(ps, root, tmp):
 
 # ------------------------------------------------------------ сценарии (настоящие процессы)
 def call(impl, ps, cmd, data, root, env=None, args=None):
-    e = dict(os.environ, CLAUDE_PROJECT_DIR=root, CLAUDE_TRUST_LEVEL='normal', PYTHONUTF8='1', KIT_NO_UPDATE_CHECK='1')
+    # Сценарии по умолчанию идут в полном режиме — он проверяет все требования; быстрый проверяется отдельно.
+    e = dict(os.environ, CLAUDE_PROJECT_DIR=root, CLAUDE_TRUST_LEVEL='normal', CLAUDE_KIT_MODE='full', PYTHONUTF8='1', KIT_NO_UPDATE_CHECK='1')
     e.update(env or {})
     if impl == 'py':
         argv = [sys.executable, os.path.join(HOOKS, 'kit_hooks.py'), cmd] + (args or [])
@@ -620,6 +621,19 @@ def scenarios(impl, ps, tmp):
         S('замер: начало хода 4', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
     turn_with([tu('Bash', {'command': 'ssh host cat app/rivals-map.tsx'})])
     S('интерфейс: только чтение .tsx — молчит', 'check-docs', d10t, r, 'allow')
+
+    # быстрый режим (по умолчанию у владельца): в конце ответа ничего не требуется, пока он не попросил проверку
+    FAST = {'CLAUDE_KIT_MODE': ''}
+    S('быстро: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx', env=FAST)
+    turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена.')])
+    S('быстро: экран правили, проверяющего и замера нет — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
+    S('быстро: ширина в css — без памятки', 'check-python',
+      dict(d10t, tool_name='Edit', tool_input={'file_path': r + '/app/static/app.css', 'old_string': '.mtab{}', 'new_string': '.mtab{ min-width: 62px }'}), r, 'allow', env=FAST)
+    S('быстро: запрещённое в css — всё равно названо', 'check-python',
+      dict(d10t, tool_name='Edit', tool_input={'file_path': r + '/app/static/app.css', 'old_string': '.pt{}', 'new_string': '.pt{ left: 45%; margin-top: -8px }'}), r, 'block', 'положение в процентах', env=FAST)
+    S('быстро: «проверь» — подсказка полного порядка', 'turn-start', dict(d10t, prompt='проверь карту конкурентов, всё ли работает'), r, 'ctx', 'владелец просит проверку', env=FAST)
+    turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта проверена, поправил отступ.')])
+    S('быстро: попросил проверку — без проверяющего не выпускает', 'check-docs', d10t, r, 'block', 'ui-checker не ходил', env=FAST)
 
     # «как в эталоне» — только со счётом сверки и парой снимков
     if os.path.isfile(os.path.join(r, '.claude', 'skills', 'clone-screen', 'SKILL.md')):

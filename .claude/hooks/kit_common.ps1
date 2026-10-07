@@ -74,6 +74,10 @@ function Sort-Ordinal($items) {
     [Array]::Sort($a, [StringComparer]::Ordinal)
     return ,$a
 }
+$script:CheckRe = 'провер|перепровер|ошибк|\bбаг|тест|сда[юёе]м?\b|сдавай|приним|принят|убедись|ревизи|аудит|всё\s+ли|все\s+ли|перед\s+(выкладк|депло|боев)|на\s+боевой|выкладыва|деплой|качеств'
+$script:CheckHint = 'Набор: владелец просит проверку — на этот ход полный порядок: проверка кода субагентом change-verifier (Opus), экраны — ui-checker и замер вёрстки на четырёх ширинах, копия — пара снимков и счёт; итог таблицей «что проверено · результат · что исправлено». Не ясно, что именно и где проверять, — один вопрос «проверить на ошибки? где?» и ждать.'
+function Test-KitFull { return (([string]$env:CLAUDE_KIT_MODE).Trim().ToLowerInvariant() -eq 'full') }
+function Test-FastTurn($snap) { if (Test-KitFull) { return $false }; return (-not ((Get-Prop $snap 'check') -eq $true)) }
 function Test-TrustFull { return (([string]$env:CLAUDE_TRUST_LEVEL).Trim().ToLowerInvariant() -eq 'full') }
 function Get-ProjectDir($data) {
     $d = [string]$env:CLAUDE_PROJECT_DIR
@@ -857,6 +861,7 @@ function Invoke-LayoutGuard($data) {
     if ($hits.Count -eq 0) { return }
     $list = @($hits.Keys | Sort-Object | Select-Object -First 6) -join ', '
     $banned = @(); foreach ($b in $script:LayoutBan) { if ([regex]::IsMatch($added, $b[0], 'IgnoreCase')) { $banned += $b[1] } }
+    if (($banned.Count -eq 0) -and (Test-FastTurn (Get-TurnSnap $data))) { return }
     $ban = ''; if ($banned.Count -gt 0) { $ban = $script:LayoutBanTail + ($banned -join '; ') + '.' }
     Out-Block @('В ' + [System.IO.Path]::GetFileName($path) + ' добавлено размер/положение: ' + $list + '.' + $ban + ' Перед тем как идти дальше: 1) grep — где ещё применяется этот селектор/класс и на каких страницах; общий элемент — править в общем месте (тема, общий класс), не в экране; 2) значение из темы или из документа вида, не «сырое» число; 3) снимок до/после на КАЖДОЙ странице с этим элементом и на 320 px — ничего не наезжает, не обрезано, не уехало, длинные слова переносятся, таблица в .table-wrap; 4) владелец не называл этот размер — не добавлять, вернуть как было. Проверил — продолжай.')
 }
@@ -1663,7 +1668,7 @@ function Invoke-TurnStart($data) {
     $isStatus = Test-StatusQuestion $promptRaw
     $isAnswer = (-not $isStatus) -and (Test-Question $promptRaw)
     $isOk = ($promptRaw.Trim().Length -le 24) -and [regex]::IsMatch($promptRaw.Trim(), $script:OkRe, 'IgnoreCase')
-    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
+    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); check = [regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -1682,12 +1687,13 @@ function Invoke-TurnStart($data) {
     elseif ($isAnswer) { Write-Out $script:AnswerHint }
     elseif ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
     if ($isExact) { Write-Out $script:ExactHint }
+    if ([regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase') -and -not (Test-KitFull)) { Write-Out $script:CheckHint }
     if ([regex]::IsMatch($promptRaw, $script:LiteralRe, 'IgnoreCase') -and -not $promptRaw.TrimStart().StartsWith('/')) { Write-Out $script:LiteralHint }
     $ctxHint = Get-ContextHint $root
     if ($ctxHint) { Write-Out $ctxHint }
     $hint = Get-ChoiceHint $prompt
     if ($hint) { foreach ($line in $hint) { Write-Out $line } }
-    $mt = Get-MainTaskHint $root
+    $mt = ''; if (Test-KitFull) { $mt = Get-MainTaskHint $root }
     if ($mt) { Write-Out $mt }
     $sh = Get-SlowCallHint $data
     if ($sh) { Write-Out $sh }
@@ -1820,6 +1826,12 @@ function Invoke-CheckDocs($data) {
     $since = -1.0
     if ($snap) { try { $since = [double](Get-Prop $snap 'ts') - 1.0 } catch { $since = -1.0 } }
     $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
+    if (Test-FastTurn $snap) {
+        # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
+        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) }
+        if ($fm.Count -gt 0) { Out-StopBlock $data $snap @('Перед завершением: ' + ($fm -join ' ')) $again }
+        return
+    }
     $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
     $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')

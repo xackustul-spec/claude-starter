@@ -92,6 +92,22 @@ def block(lines):
     sys.exit(2)
 
 
+# Режим работы. Быстрый — по умолчанию: хук в конце ответа ничего не требует (ни документов, ни проверяющего,
+# ни замера, ни строки главной задачи) — сделал и отдал, как в чате. Полная проверка — на ход, где владелец по
+# смыслу просит проверить (CHECK_RE), или всегда при CLAUDE_KIT_MODE=full. Слова владельца 07.10.2026:
+# «я делаю запрос и жду как будто вечно… ошибки на проверку отправляю не сразу, а в конце».
+CHECK_RE = re.compile('провер|перепровер|ошибк|\\bбаг|тест|сда[юёе]м?\\b|сдавай|приним|принят|убедись|ревизи|аудит|всё\\s+ли|все\\s+ли|перед\\s+(выкладк|депло|боев)|на\\s+боевой|выкладыва|деплой|качеств', re.I)
+CHECK_HINT = 'Набор: владелец просит проверку — на этот ход полный порядок: проверка кода субагентом change-verifier (Opus), экраны — ui-checker и замер вёрстки на четырёх ширинах, копия — пара снимков и счёт; итог таблицей «что проверено · результат · что исправлено». Не ясно, что именно и где проверять, — один вопрос «проверить на ошибки? где?» и ждать.' + '\n'
+
+
+def kit_full():
+    return os.environ.get('CLAUDE_KIT_MODE', '').strip().lower() == 'full'
+
+
+def fast_turn(snap):
+    return not kit_full() and not (snap or {}).get('check')
+
+
 def trust_full():
     return os.environ.get('CLAUDE_TRUST_LEVEL', '').strip().lower() == 'full'
 
@@ -1049,6 +1065,8 @@ def layout_guard(data):
         return
     hits = sorted(set(hits))[:6]
     banned = [msg for rx, msg in LAYOUT_BAN if rx.search(added)]
+    if not banned and fast_turn(turn_snap(data)):
+        return  # быстрый режим: памятка о размерах не нужна, называется только запрещённое
     ban = (LAYOUT_BAN_TAIL + '; '.join(banned) + '.') if banned else ''
     block(['В ' + os.path.basename(path) + ' добавлено размер/положение: ' + ', '.join(hits) + '.' + ban + ' Перед тем как идти дальше: '
            '1) grep — где ещё применяется этот селектор/класс и на каких страницах; общий элемент — править в общем '
@@ -2025,6 +2043,7 @@ def turn_start(data):
     snap = {'ts': time.time(), 'head': None, 'status': {},
             'exact': bool(EXACT_RE.search(prompt_raw)),
             'complaint': bool(COMPLAINT_RE.search(prompt_raw)),
+            'check': bool(CHECK_RE.search(prompt_raw)),
             'ready_q': is_status_question(prompt_raw),
             'answer': (not is_status_question(prompt_raw)) and is_question(prompt_raw),
             'ok': bool(OK_RE.match(prompt_raw.strip())) and len(prompt_raw.strip()) <= 24,
@@ -2060,6 +2079,8 @@ def turn_start(data):
         sys.stdout.write(VAGUE_HINT)
     if snap['exact']:
         sys.stdout.write(EXACT_HINT)
+    if snap['check'] and not kit_full():
+        sys.stdout.write(CHECK_HINT)
     if LITERAL_RE.search(prompt_raw) and not prompt_raw.lstrip().startswith('/'):
         sys.stdout.write(LITERAL_HINT)
     ctx = context_hint(root)
@@ -2068,7 +2089,7 @@ def turn_start(data):
     hint = choice_hint(prompt)
     if hint:
         sys.stdout.write(hint)
-    mt = main_task_hint(root)
+    mt = main_task_hint(root) if kit_full() else ''  # строка о главной задаче — только в полном режиме
     if mt:
         sys.stdout.write(mt)
     sh = slow_call_hint(data)
@@ -2109,6 +2130,12 @@ def check_docs(data):
         snap = None
     since = float((snap or {}).get('ts') or 0) - 1.0
     again = data.get('stop_hook_active') is True
+    if fast_turn(snap):
+        # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
+        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG]
+        if msgs:
+            stop_block(data, snap, ['Перед завершением: ' + ' '.join(msgs)], again)
+        return
     # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
     task_msgs = (main_task_check(data, root, since) + ui_check_msgs(data, root, since)
                  + ([] if again else layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
