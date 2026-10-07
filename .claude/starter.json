@@ -33,7 +33,7 @@
   ".claude/rules/owner-data.md": "a51e89a1bb656ce2",
   ".claude/rules/screen-truth.md": "48075656714f5a73",
   ".claude/rules/security.md": "1f57ba59216e0bdd",
-  ".claude/rules/ui.md": "f485fd7c2e88f152",
+  ".claude/rules/ui.md": "22fcf73975389b41",
   ".claude/settings.local.example.json": "55f692d7bb14e9a4",
   ".claude/skills/clone-screen/SKILL.md": "a69cfd2df6c5dff9",
   ".claude/skills/compat-check/SKILL.md": "0ada265ab6422a3b",
@@ -79,5 +79,5 @@
  },
  "installed": "2026-10-07",
  "source": ".",
- "version": "2.42.0"
+ "version": "2.42.1"
 }
