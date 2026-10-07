@@ -841,8 +841,11 @@ def scenarios(impl, ps, tmp):
     S('«да» владельца: тот же вызов проходит', 'guard-shell', {'session_id': 'ok-' + impl, 'tool_input': {'command': 'pip install requests'}, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'allow')
     S('«да» владельца: следующий ход — снова вопрос', 'turn-start', {'session_id': 'ok-' + impl, 'prompt': 'теперь поставь ещё numpy', 'cwd': r, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'ctx')
     S('«да» владельца: вопрос вернулся', 'guard-shell', {'session_id': 'ok-' + impl, 'tool_input': {'command': 'pip install numpy'}, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'ask')
-    S('субагент: в задание вписан предел', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'ui-checker', 'prompt': 'сверь экран конкурентов'}}, r, 'ctx', 'Предел: 8 минут')
-    S('субагент: предел уже есть — молчит', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': 'сверь\n\nПредел: 8 минут и 15 вызовов'}}, r, 'allow')
+    brief = 'Задача: сверить экран конкурентов с эталоном\nГде: http://localhost:3000/rivals и docs/ai/specs/ui/rivals.md\nВернуть: таблицу пункт — есть/нет и счёт\nСтоп: все пункты описи пройдены'
+    S('субагент: задание по форме — вписан предел', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'ui-checker', 'prompt': brief}}, r, 'ctx', 'Не нашёл за 6 вызовов')
+    S('субагент: предел уже есть — молчит', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': brief + '\n\nПредел: 15 вызовов'}}, r, 'allow')
+    S('субагент: задание без формы — отказ с образцом', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'general-purpose', 'prompt': 'изучи, как устроена загрузка платежей, и расскажи'}}, r, 'deny', 'Задача: <одно действие')
+    S('субагент: нет строки «Стоп» — отказ', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': 'Задача: найти, где пишется statement_id\nГде: work/app/services.py\nВернуть: путь и строку'}}, r, 'deny', 'Стоп:')
     S('оболочка: ssh без команды — отказ', 'guard-shell', {'tool_input': {'command': 'ssh nick@192.168.88.115'}}, r, 'deny', 'ждёт ввода')
     S('оболочка: git commit без -m — отказ', 'guard-shell', {'tool_input': {'command': 'git commit'}}, r, 'deny', 'ждёт ввода')
     S('оболочка: ssh с командой — молча', 'guard-shell', {'tool_input': {'command': 'ssh host bash /tmp/x.sh'}}, r, 'allow')

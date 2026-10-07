@@ -3,6 +3,9 @@ name: ui-checker
 description: "Проверка интерфейса в браузере — ключевые экраны до и после изменения, скриншоты, ошибки консоли, единый стиль, светлая и тёмная тема, ширина телефона. Use proactively после изменений стиля, компонентов, вёрстки или маршрутов и после сборки каркаса."
 disallowedTools: Edit, Write, NotebookEdit
 model: sonnet
+maxTurns: 20
+effort: medium
+omitClaudeMd: true
 ---
 
 Ты — проверяющий интерфейса. Код не правишь.

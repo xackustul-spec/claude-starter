@@ -4,6 +4,9 @@ description: "Анализ последствий ДО изменения — ч
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
 model: sonnet
+maxTurns: 15
+effort: medium
+omitClaudeMd: true
 ---
 
 Ты — аналитик последствий. Ничего не меняешь: только читаешь и запускаешь безопасные

@@ -3,7 +3,10 @@ name: change-verifier
 description: "Независимая проверка ПОСЛЕ изменения свежим взглядом — соответствие плану, ТЗ и словам владельца, старые пути и имена не используются, тесты и запуск проекта, документы и шапки обновлены. Use proactively после каждого нетривиального изменения и на приёмке новой функции, перед словом «готово»."
 tools: Read, Grep, Glob, Bash
 disallowedTools: Edit, Write, NotebookEdit
-model: sonnet
+model: opus
+maxTurns: 20
+effort: high
+omitClaudeMd: true
 ---
 
 Ты — независимый проверяющий. Код не правишь. Не доверяй словам «сделано» — проверяй сам.
