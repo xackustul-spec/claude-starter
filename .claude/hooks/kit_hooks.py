@@ -1149,7 +1149,37 @@ def choice_hint(prompt):
 # сколько думала модель, сколько токенов ушло, чем работали (модель, усилие, скорость),
 # какие инструменты, куда смотрели и сам вопрос владельца. Файл только растёт.
 TIMING_HEAD = ('начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;'
-               'выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос')
+               'выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос'
+               ';правок_кода;правок_док;повт_чтений;субагентов;субагент_с;возвратов;претензия')
+# Качество хода: претензия владельца в следующем сообщении — прямой признак плохо выполненного задания.
+COMPLAINT_RE = re.compile('не\\s+то\\b|опять|снова\\s+(не|то\\s+же)|всё\\s+равно|все\\s+равно|не\\s+работает|не\\s+так|я\\s+же\\s+(сказал|говорил|просил)|сколько\\s+(можно|раз)|чушь|бред|гуано|дерьм|кривo|крив(о|ая|ой|ые)|наезжа|заезжа|съехал|переделай|верни\\s+как\\s+было|почему\\s+(так\\s+)?долго|ничего\\s+не\\s+(измен|поменя|сдела)|ты\\s+(не\\s+)?(понял|слышишь)', re.I)
+DOC_PATH_RE = re.compile(r'(^|[\\/])docs[\\/]|\.(md|txt)$', re.I)
+
+
+def quality_cells(uses, results, snap):
+    # Правки в код и в документы, повторные чтения одного файла, число и время субагентов,
+    # возвраты хода хуком и претензия владельца — чтобы бесполезную работу было видно числом.
+    code = docs = agents = 0
+    agent_s, seen, rep = 0.0, {}, 0
+    for tid, (name, inp, ts) in uses.items():
+        inp = inp if isinstance(inp, dict) else {}
+        path = str(inp.get('file_path') or inp.get('notebook_path') or '')
+        if name in ('Write', 'Edit', 'MultiEdit', 'NotebookEdit'):
+            if DOC_PATH_RE.search(path):
+                docs += 1
+            else:
+                code += 1
+        elif name == 'Read' and path:
+            k = path.replace('\\', '/').lower()
+            rep += 1 if k in seen else 0
+            seen[k] = 1
+        elif name == 'Agent':
+            agents += 1
+            end = results.get(tid)
+            if end is not None and end >= ts:
+                agent_s += end - ts
+    return [str(code), str(docs), str(rep), str(agents), '%.0f' % agent_s,
+            str(max(0, int(snap.get('stops') or 1) - 1)), '1' if snap.get('complaint') else '0']
 TIMING_TAIL = 1500000
 TIMING_SLOW = 120.0
 
@@ -1293,7 +1323,7 @@ def timing_row(data, snap, root):
                      csv_cell(st['model']), csv_cell(st['effort']), csv_cell(st['speed']),
                      str(len(outside)),
                      csv_cell(top), csv_cell(' '.join(targets[:12]))[:180],
-                     csv_cell(snap.get('prompt'))[:140]])
+                     csv_cell(snap.get('prompt'))[:140]] + quality_cells(uses, results, snap))
 
 
 SLOW_CALL_S = 600
@@ -1384,6 +1414,11 @@ def write_timing(data, root):
         return
     if not snap.get('ts'):
         return
+    snap['stops'] = int(snap.get('stops') or 0) + 1  # сколько раз ход подходил к концу: больше одного — возвращал хук
+    try:
+        json.dump(snap, open(state_file(data, 'turn'), 'w', encoding='utf-8'), ensure_ascii=False)
+    except Exception:
+        pass
     try:
         row = timing_row(data, snap, root)
     except Exception:
@@ -1393,7 +1428,12 @@ def write_timing(data, root):
         if os.path.isfile(path):
             with open(path, 'rb') as fh:
                 first = fh.readline().decode('utf-8-sig', 'replace').strip()
-            if first != TIMING_HEAD:
+            if first != TIMING_HEAD and first and TIMING_HEAD.startswith(first):
+                # Добавились столбцы справа: заголовок заменить, историю оставить (старые строки короче).
+                body = open(path, encoding='utf-8-sig', errors='replace').read().split('\n', 1)
+                with open(path, 'w', encoding='utf-8', newline='\n') as fh:
+                    fh.write(TIMING_HEAD + '\n' + (body[1] if len(body) > 1 else ''))
+            elif first != TIMING_HEAD:
                 # Колонки сменились: старый файл отложить целиком, новый начать с заголовка.
                 os.replace(path, os.path.join(os.path.dirname(path), 'timing.old.csv'))
         if not os.path.isfile(path):
@@ -1984,6 +2024,7 @@ def turn_start(data):
     has_secret = bool(PASTED_SECRET_RE.search(prompt_raw))
     snap = {'ts': time.time(), 'head': None, 'status': {},
             'exact': bool(EXACT_RE.search(prompt_raw)),
+            'complaint': bool(COMPLAINT_RE.search(prompt_raw)),
             'ready_q': is_status_question(prompt_raw),
             'answer': (not is_status_question(prompt_raw)) and is_question(prompt_raw),
             'ok': bool(OK_RE.match(prompt_raw.strip())) and len(prompt_raw.strip()) <= 24,

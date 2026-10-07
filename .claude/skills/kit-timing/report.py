@@ -11,6 +11,9 @@ NUM = {'total': float, 'tools': float, 'model_s': float, 'calls': int, 'req': in
        'tin': int, 'cread': int, 'cwrite': int, 'tout': int, 'think': int, 'outside': int}
 
 
+QCOLS = ['q_code', 'q_docs', 'q_rep', 'q_agents', 'q_agent_s', 'q_ret', 'q_compl']
+
+
 def load(path):
     rows = []
     with open(path, encoding='utf-8-sig', errors='replace') as fh:
@@ -22,6 +25,12 @@ def load(path):
             if len(p) < len(COLS):
                 continue
             row = dict(zip(COLS, p))
+            # Столбцы качества появились позже: в старых строках их нет.
+            for i, k in enumerate(QCOLS):
+                try:
+                    row[k] = int(float(p[len(COLS) + i]))
+                except (IndexError, ValueError):
+                    row[k] = None
             try:
                 for k, f in NUM.items():
                     row[k] = f(row[k] or 0)
@@ -143,6 +152,45 @@ def main():
         print('  ходов, где трогали файлы вне папки проекта: %d — так нельзя, назвать владельцу' % len(out_turns))
         for r in out_turns[-5:]:
             print('    %s  %s' % (r['when'], r['ask'][:60]))
+
+    quality(rows)
+
+
+def quality(rows):
+    # Качество обработки: где работа шла впустую. Считается по ходам, где столбцы качества уже есть.
+    q = [r for r in rows if r.get('q_code') is not None]
+    if not q:
+        print('\nКачество: столбцов ещё нет — появятся с первых ходов после обновления набора.')
+        return
+    n = len(q)
+    code = sum(r['q_code'] for r in q); docs = sum(r['q_docs'] for r in q)
+    print('\nКачество обработки (ходов со счётом: %d):' % n)
+    print('  правок: в код %d, в документы %d (%.0f%% — писанина)' % (code, docs, 100.0 * docs / (code + docs) if code + docs else 0))
+    compl = [r for r in q if r['q_compl']]
+    print('  ходов, начатых с претензии владельца («не то», «опять», «наезжает»): %d из %d (%.0f%%)' % (len(compl), n, 100.0 * len(compl) / n))
+    # Ход, после которого владелец пришёл с претензией, — это и есть плохо выполненное задание.
+    bad = [q[i - 1] for i in range(1, n) if q[i]['q_compl']]
+    if bad:
+        print('  задания, выполненные плохо (следом пришла претензия), и чего они стоили:')
+        for r in bad[-8:]:
+            print('    %s  %4.0f с, выход %5d, правок код/док %d/%d  %s' % (r['when'], r['total'], r['tout'], r['q_code'], r['q_docs'], r['ask'][:46]))
+        print('    всего на них: %.0f мин и %.0f тыс. токенов выхода' % (sum(r['total'] for r in bad) / 60.0, sum(r['tout'] for r in bad) / 1e3))
+    ret = [r for r in q if r['q_ret']]
+    print('  ходов, которые хук вернул на доработку: %d (возвратов всего %d)' % (len(ret), sum(r['q_ret'] for r in q)))
+    idle = [r for r in q if r['total'] >= 90 and r['q_code'] == 0 and not r['q_agents']]
+    print('  ходов дольше 1,5 мин без единой правки кода и без субагента: %d — ответ словами или писанина' % len(idle))
+    for r in idle[-5:]:
+        print('    %s  %4.0f с, думал %5d, правок в документы %d  %s' % (r['when'], r['total'], r['think'], r['q_docs'], r['ask'][:46]))
+    ag = [r for r in q if r['q_agents']]
+    if ag:
+        s = sum(r['q_agent_s'] for r in ag); c = sum(r['q_agents'] for r in ag)
+        print('  субагенты: %d вызовов в %d ходах, ждали их %.0f мин, в среднем %.0f с на вызов' % (c, len(ag), s / 60.0, s / c))
+        for r in sorted(ag, key=lambda x: -x['q_agent_s'])[:3]:
+            print('    %s  субагент %4.0f с из %4.0f с хода  %s' % (r['when'], r['q_agent_s'], r['total'], r['ask'][:46]))
+    rep = sum(r['q_rep'] for r in q)
+    print('  повторных чтений одного файла внутри хода: %d' % rep)
+    docsonly = [r for r in q if r['q_docs'] >= 3 and r['q_docs'] > 2 * r['q_code']]
+    print('  ходов, где в документы писали втрое больше, чем в код: %d' % len(docsonly))
 
 
 if __name__ == '__main__':

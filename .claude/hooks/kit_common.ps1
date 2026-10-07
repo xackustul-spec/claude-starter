@@ -918,7 +918,9 @@ function Get-ChoiceHint([string]$prompt) {
 # Строка на каждый ответ: когда начали, сколько всего, сколько ждали инструменты,
 # сколько думала модель, сколько токенов ушло, чем работали (модель, усилие, скорость),
 # какие инструменты, куда смотрели и сам вопрос владельца. Файл только растёт.
-$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос'
+$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос;правок_кода;правок_док;повт_чтений;субагентов;субагент_с;возвратов;претензия'
+$script:ComplaintRe = 'не\s+то\b|опять|снова\s+(не|то\s+же)|всё\s+равно|все\s+равно|не\s+работает|не\s+так|я\s+же\s+(сказал|говорил|просил)|сколько\s+(можно|раз)|чушь|бред|гуано|дерьм|кривo|крив(о|ая|ой|ые)|наезжа|заезжа|съехал|переделай|верни\s+как\s+было|почему\s+(так\s+)?долго|ничего\s+не\s+(измен|поменя|сдела)|ты\s+(не\s+)?(понял|слышишь)'
+$script:DocPathRe = '(^|[\\/])docs[\\/]|\.(md|txt)$'
 $script:TimingTail = 1500000
 $script:TimingSlow = 120.0
 $script:Inv = [System.Globalization.CultureInfo]::InvariantCulture
@@ -1076,6 +1078,7 @@ function Get-TimingRow($data, $snap, [string]$root) {
     $total = (Get-NowSec) - $start
     if ($total -lt 0) { $total = 0.0 }
     $calls = 0; $toolS = 0.0; $names = @{}; $targets = @(); $outside = @()
+    $qCode = 0; $qDocs = 0; $qRep = 0; $qAgents = 0; $qAgentS = 0.0; $qSeen = @{}
     $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) ($start - 1.0)
     $seen = @{}
     foreach ($u in @($tt.uses | Sort-Object Ts)) {
@@ -1086,6 +1089,16 @@ function Get-TimingRow($data, $snap, [string]$root) {
         if ($tt.results.ContainsKey($u.Id)) {
             $end = [double]$tt.results[$u.Id]
             if ($end -ge $u.Ts) { $toolS += ($end - $u.Ts) }
+        }
+        $qPath = [string](Get-Prop $u.Input 'file_path'); if (-not $qPath) { $qPath = [string](Get-Prop $u.Input 'notebook_path') }
+        if ($u.Name -in @('Write', 'Edit', 'MultiEdit', 'NotebookEdit')) {
+            if ([regex]::IsMatch($qPath, $script:DocPathRe, 'IgnoreCase')) { $qDocs += 1 } else { $qCode += 1 }
+        } elseif ($u.Name -eq 'Read' -and $qPath) {
+            $qk = ($qPath -replace '\\', '/').ToLowerInvariant()
+            if ($qSeen.ContainsKey($qk)) { $qRep += 1 } else { $qSeen[$qk] = 1 }
+        } elseif ($u.Name -eq 'Agent') {
+            $qAgents += 1
+            if ($tt.results.ContainsKey($u.Id)) { $qe = [double]$tt.results[$u.Id]; if ($qe -ge $u.Ts) { $qAgentS += ($qe - $u.Ts) } }
         }
         $tgt = Get-ToolTarget $u.Input
         if ($tgt -and ($targets -notcontains $tgt)) { $targets += $tgt }
@@ -1113,6 +1126,10 @@ function Get-TimingRow($data, $snap, [string]$root) {
         (Get-CsvCell $top),
         (Get-Cut (Get-CsvCell (@($targets | Select-Object -First 12) -join ' ')) 180),
         (Get-Cut (Get-CsvCell (Get-Prop $snap 'prompt')) 140))
+    $qStops = 0; try { $qStops = [int](Get-Prop $snap 'stops') } catch { $qStops = 0 }
+    $qRet = [Math]::Max(0, $(if ($qStops -lt 1) { 1 } else { $qStops }) - 1)
+    $qCompl = '0'; if ((Get-Prop $snap 'complaint') -eq $true) { $qCompl = '1' }
+    $cells += @([string]$qCode, [string]$qDocs, [string]$qRep, [string]$qAgents, $qAgentS.ToString('0', $script:Inv), [string]$qRet, $qCompl)
     return ($cells -join ';')
 }
 function Get-TimingPath([string]$root) {
@@ -1165,6 +1182,12 @@ function Write-Timing($data, [string]$root) {
         if (Test-Path -LiteralPath $sf) { $snap = (Get-Content -LiteralPath $sf -Raw -Encoding UTF8) | ConvertFrom-Json }
     } catch { $snap = $null }
     if ($null -eq $snap -or -not (Get-Prop $snap 'ts')) { return }
+    # Сколько раз ход подходил к концу: больше одного — возвращал хук.
+    try {
+        $stops = 0; try { $stops = [int](Get-Prop $snap 'stops') } catch { $stops = 0 }
+        $snap | Add-Member -NotePropertyName stops -NotePropertyValue ($stops + 1) -Force
+        ($snap | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'turn') -Encoding UTF8
+    } catch {}
     $row = ''
     try { $row = Get-TimingRow $data $snap $root } catch { return }
     if (-not $row) { return }
@@ -1174,7 +1197,13 @@ function Write-Timing($data, [string]$root) {
             $first = ''
             $sr = New-Object System.IO.StreamReader($path, $script:Utf8)
             try { $first = ([string]$sr.ReadLine()).TrimEnd("`r").TrimStart([char]0xFEFF) } finally { $sr.Dispose() }
-            if ($first -ne $script:TimingHead) {
+            if (($first -ne $script:TimingHead) -and $first -and $script:TimingHead.StartsWith($first)) {
+                # Добавились столбцы справа: заголовок заменить, историю оставить (старые строки короче).
+                $all = [System.IO.File]::ReadAllText($path, $script:Utf8).TrimStart([char]0xFEFF)
+                $nl = $all.IndexOf("`n")
+                $rest = ''; if ($nl -ge 0) { $rest = $all.Substring($nl + 1) }
+                [System.IO.File]::WriteAllText($path, ($script:TimingHead + "`n" + $rest), $script:Utf8)
+            } elseif ($first -ne $script:TimingHead) {
                 # Колонки сменились: старый файл отложить целиком, новый начать с заголовка.
                 $old = Join-Path (Split-Path -Parent $path) 'timing.old.csv'
                 if ([System.IO.File]::Exists($old)) { [System.IO.File]::Delete($old) }
@@ -1634,7 +1663,7 @@ function Invoke-TurnStart($data) {
     $isStatus = Test-StatusQuestion $promptRaw
     $isAnswer = (-not $isStatus) -and (Test-Question $promptRaw)
     $isOk = ($promptRaw.Trim().Length -le 24) -and [regex]::IsMatch($promptRaw.Trim(), $script:OkRe, 'IgnoreCase')
-    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; ok = $isOk; exact = $isExact; prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
+    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
