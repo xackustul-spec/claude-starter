@@ -1,7 +1,8 @@
 {
   "env": {
     "CLAUDE_TRUST_LEVEL": "normal",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000"
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "400000",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "40"
   },
   "autoMemoryEnabled": false,
   "permissions": {
