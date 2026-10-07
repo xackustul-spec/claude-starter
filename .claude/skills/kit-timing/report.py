@@ -31,6 +31,7 @@ def load(path):
                     row[k] = int(float(p[len(COLS) + i]))
                 except (IndexError, ValueError):
                     row[k] = None
+            row['ver'] = p[len(COLS) + len(QCOLS)].strip() if len(p) > len(COLS) + len(QCOLS) else ''
             try:
                 for k, f in NUM.items():
                     row[k] = f(row[k] or 0)
@@ -165,6 +166,15 @@ def quality(rows):
     n = len(q)
     code = sum(r['q_code'] for r in q); docs = sum(r['q_docs'] for r in q)
     print('\nКачество обработки (ходов со счётом: %d):' % n)
+    vers = {}
+    for r in q:
+        v = (r.get('ver') or '—')
+        d = vers.setdefault(v, [0, 0.0, 0, r['when']])
+        d[0] += 1; d[1] += r['total']; d[2] += 1 if r['q_compl'] else 0
+    if len(vers) > 1 or '—' not in vers:
+        print('  по версиям набора (хронология: что меняли и что стало):')
+        for v, d in sorted(vers.items(), key=lambda kv: kv[1][3]):
+            print('    %-8s с %s: ходов %3d, средний ход %4.0f с, претензий %d' % (v, d[3][:16], d[0], d[1] / d[0], d[2]))
     print('  правок: в код %d, в документы %d (%.0f%% — писанина)' % (code, docs, 100.0 * docs / (code + docs) if code + docs else 0))
     compl = [r for r in q if r['q_compl']]
     print('  ходов, начатых с претензии владельца («не то», «опять», «наезжает»): %d из %d (%.0f%%)' % (len(compl), n, 100.0 * len(compl) / n))

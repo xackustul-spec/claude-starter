@@ -241,5 +241,6 @@
       }
     ]
   },
-  "model": "sonnet"
+  "model": "sonnet",
+  "effortLevel": "medium"
 }
