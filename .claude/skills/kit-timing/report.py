@@ -32,6 +32,7 @@ def load(path):
                 except (IndexError, ValueError):
                     row[k] = None
             row['ver'] = p[len(COLS) + len(QCOLS)].strip() if len(p) > len(COLS) + len(QCOLS) else ''
+            row['boot'] = p[len(COLS) + len(QCOLS) + 1].strip() if len(p) > len(COLS) + len(QCOLS) + 1 else ''
             try:
                 for k, f in NUM.items():
                     row[k] = f(row[k] or 0)
@@ -197,6 +198,24 @@ def quality(rows):
         print('  субагенты: %d вызовов в %d ходах, ждали их %.0f мин, в среднем %.0f с на вызов' % (c, len(ag), s / 60.0, s / c))
         for r in sorted(ag, key=lambda x: -x['q_agent_s'])[:3]:
             print('    %s  субагент %4.0f с из %4.0f с хода  %s' % (r['when'], r['q_agent_s'], r['total'], r['ask'][:46]))
+    # Чистый лист: первые три хода после /clear, сжатия или нового сеанса против остальных.
+    starts = [(i, r['boot']) for i, r in enumerate(q) if r.get('boot')]
+    if starts:
+        kinds = {}
+        for _, b in starts:
+            kinds[b] = kinds.get(b, 0) + 1
+        print('  начал сеанса: ' + ', '.join('%s — %d' % (k, c) for k, c in sorted(kinds.items())) + ' (clear — очистка, compact — сжатие)')
+        fresh = set()
+        for i, _ in starts:
+            fresh.update(range(i, min(i + 3, n)))
+        a = [q[i] for i in sorted(fresh)]; b = [q[i] for i in range(n) if i not in fresh]
+        for label, rr in (('первые 3 хода после начала', a), ('остальные ходы', b)):
+            if rr:
+                print('    %-27s ходов %3d, средний %4.0f с, претензий %d (%.0f%%), повторных чтений %d'
+                      % (label, len(rr), sum(x['total'] for x in rr) / len(rr), sum(1 for x in rr if x['q_compl']),
+                         100.0 * sum(1 for x in rr if x['q_compl']) / len(rr), sum(x['q_rep'] for x in rr)))
+        for i, bkind in starts[-6:]:
+            print('    %s  %s' % (q[i]['when'], bkind))
     rep = sum(r['q_rep'] for r in q)
     print('  повторных чтений одного файла внутри хода: %d' % rep)
     docsonly = [r for r in q if r['q_docs'] >= 3 and r['q_docs'] > 2 * r['q_code']]

@@ -445,8 +445,8 @@ def scenarios(impl, ps, tmp):
     check('хронометраж: заголовок со столбцами токенов', rows and 'вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т' in rows[0], rows[:1])
     cells = rows[1].split(';') if len(rows) > 1 else []
     check('хронометраж: одна строка на ход', len(rows) == 2, len(rows))
-    check('хронометраж: столбцы качества в заголовке', rows and rows[0].endswith('возвратов;претензия;набор'), rows[:1])
-    check('хронометраж: в строке 26 ячеек', len(cells) == 26, len(cells))
+    check('хронометраж: столбцы качества в заголовке', rows and rows[0].endswith('претензия;набор;старт'), rows[:1])
+    check('хронометраж: в строке 27 ячеек', len(cells) == 27, len(cells))
     check('хронометраж: столбцов ровно столько же, сколько в заголовке',
           rows and len(cells) == len(rows[0].split(';')), len(cells))
     check('хронометраж: всего секунд посчитано', len(cells) > 1 and 39.0 <= float(cells[1] or 0) <= 60.0, cells[1:2])

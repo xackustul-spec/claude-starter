@@ -1168,11 +1168,22 @@ def choice_hint(prompt):
 # какие инструменты, куда смотрели и сам вопрос владельца. Файл только растёт.
 TIMING_HEAD = ('начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;'
                'выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос'
-               ';правок_кода;правок_док;повт_чтений;субагентов;субагент_с;возвратов;претензия;набор')
+               ';правок_кода;правок_док;повт_чтений;субагентов;субагент_с;возвратов;претензия;набор;старт')
 # Качество хода: претензия владельца в следующем сообщении — прямой признак плохо выполненного задания.
 COMPLAINT_RE = re.compile('не\\s+то\\b|опять|снова\\s+(не|то\\s+же)|всё\\s+равно|все\\s+равно|не\\s+работает|не\\s+так|я\\s+же\\s+(сказал|говорил|просил)|сколько\\s+(можно|раз)|чушь|бред|гуано|дерьм|кривo|крив(о|ая|ой|ые)|наезжа|заезжа|съехал|переделай|верни\\s+как\\s+было|почему\\s+(так\\s+)?долго|ничего\\s+не\\s+(измен|поменя|сдела)|ты\\s+(не\\s+)?(понял|слышишь)|в\\s+(третий|четв[её]ртый|пятый|\\d+)[-\\s]*(й|ый)?\\s*раз|не\\s+вижу|ты\\s+(мне\\s+)?утверждаешь|а\\s+сказать\\s+нельзя|исполнен[оа]?\\s+не\\s+был|в\\s+этом\\s+и\\s+проблема|где\\s+(тут|же)\\s|что\\s+ты\\s+(там\\s+)?(выполня|дела)|жду\\s+уже|тупой|тупишь|самовольнича|угадыва|я\\s+(же\\s+)?просил|не\\s+просил|почему\\s+не\\s+выполня|делаешь\\s+что\\s+хочешь|что\\s+я\\s+(тебе\\s+)?сказал', re.I)
 COMPLAINT_HINT = 'Набор: это претензия — прошлый ход сделан не так, как просили. Сразу не править. В ответе по порядку: 1) процитировать, что владелец просил (его словами); 2) сказать, что сделано на деле; 3) назвать разницу одной строкой, без оправданий; 4) если объём правки можно понять по-разному (эта строка / эта и соседние / весь блок; только это / и похожее) — один вопрос с вариантами и ждать; понятно однозначно — вернуть сделанное не по просьбе как было и сделать ровно названное. Экран увидеть не можешь — сказать это и описать словами, что именно изменится и что останется. Вторая претензия подряд по одному пункту — не делать третью попытку по догадке: только вопрос.' + '\n'
 DOC_PATH_RE = re.compile(r'(^|[\\/])docs[\\/]|\.(md|txt)$', re.I)
+
+
+def take_boot(data):
+    # Отметка «сеанс начался с clear / compact / startup» читается один раз — первым ходом после события.
+    p = state_file(data, 'boot')
+    try:
+        src = str(json.load(open(p, encoding='utf-8')).get('src') or '')
+        os.remove(p)
+        return src
+    except Exception:
+        return ''
 
 
 def quality_cells(uses, results, snap):
@@ -1342,7 +1353,7 @@ def timing_row(data, snap, root):
                      csv_cell(st['model']), csv_cell(st['effort']), csv_cell(st['speed']),
                      str(len(outside)),
                      csv_cell(top), csv_cell(' '.join(targets[:12]))[:180],
-                     csv_cell(snap.get('prompt'))[:140]] + quality_cells(uses, results, snap) + [csv_cell(read_version(root))])
+                     csv_cell(snap.get('prompt'))[:140]] + quality_cells(uses, results, snap) + [csv_cell(read_version(root)), csv_cell(snap.get('boot'))])
 
 
 SLOW_CALL_S = 600
@@ -2039,6 +2050,7 @@ def turn_start(data):
     snap = {'ts': time.time(), 'head': None, 'status': {},
             'exact': bool(EXACT_RE.search(prompt_raw)),
             'complaint': bool(COMPLAINT_RE.search(prompt_raw)),
+            'boot': take_boot(data),
             'check': bool(CHECK_RE.search(prompt_raw)),
             'ready_q': is_status_question(prompt_raw),
             'answer': (not is_status_question(prompt_raw)) and is_question(prompt_raw),
@@ -2400,6 +2412,10 @@ def session_start(data):
     state_path = os.path.join(root, 'docs', 'ai', 'STATE.md')
     cleanup_state(data)
     claim_session(data, root)
+    try:  # чем начался сеанс (startup / resume / clear / compact) — попадёт в хронометраж первого хода
+        json.dump({'src': src or 'startup'}, open(state_file(data, 'boot'), 'w', encoding='utf-8'))
+    except Exception:
+        pass
     if os.path.isfile(os.path.join(root, 'INSTALL.md')) and os.path.isfile(os.path.join(root, 'VERSION')):
         lines.append(f'Это исходник набора claude-starter (версия {read_version(root)}), не проект: не устанавливать '
                      'и не заполнять docs/ai. Работа здесь — /kit-harvest (уроки из проектов), выпуск версий.')

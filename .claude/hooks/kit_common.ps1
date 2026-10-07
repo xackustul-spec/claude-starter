@@ -923,7 +923,7 @@ function Get-ChoiceHint([string]$prompt) {
 # Строка на каждый ответ: когда начали, сколько всего, сколько ждали инструменты,
 # сколько думала модель, сколько токенов ушло, чем работали (модель, усилие, скорость),
 # какие инструменты, куда смотрели и сам вопрос владельца. Файл только растёт.
-$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос;правок_кода;правок_док;повт_чтений;субагентов;субагент_с;возвратов;претензия;набор'
+$script:TimingHead = 'начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос;правок_кода;правок_док;повт_чтений;субагентов;субагент_с;возвратов;претензия;набор;старт'
 $script:ComplaintRe = 'не\s+то\b|опять|снова\s+(не|то\s+же)|всё\s+равно|все\s+равно|не\s+работает|не\s+так|я\s+же\s+(сказал|говорил|просил)|сколько\s+(можно|раз)|чушь|бред|гуано|дерьм|кривo|крив(о|ая|ой|ые)|наезжа|заезжа|съехал|переделай|верни\s+как\s+было|почему\s+(так\s+)?долго|ничего\s+не\s+(измен|поменя|сдела)|ты\s+(не\s+)?(понял|слышишь)|в\s+(третий|четв[её]ртый|пятый|\d+)[-\s]*(й|ый)?\s*раз|не\s+вижу|ты\s+(мне\s+)?утверждаешь|а\s+сказать\s+нельзя|исполнен[оа]?\s+не\s+был|в\s+этом\s+и\s+проблема|где\s+(тут|же)\s|что\s+ты\s+(там\s+)?(выполня|дела)|жду\s+уже|тупой|тупишь|самовольнича|угадыва|я\s+(же\s+)?просил|не\s+просил|почему\s+не\s+выполня|делаешь\s+что\s+хочешь|что\s+я\s+(тебе\s+)?сказал'
 $script:ComplaintHint = 'Набор: это претензия — прошлый ход сделан не так, как просили. Сразу не править. В ответе по порядку: 1) процитировать, что владелец просил (его словами); 2) сказать, что сделано на деле; 3) назвать разницу одной строкой, без оправданий; 4) если объём правки можно понять по-разному (эта строка / эта и соседние / весь блок; только это / и похожее) — один вопрос с вариантами и ждать; понятно однозначно — вернуть сделанное не по просьбе как было и сделать ровно названное. Экран увидеть не можешь — сказать это и описать словами, что именно изменится и что останется. Вторая претензия подряд по одному пункту — не делать третью попытку по догадке: только вопрос.'
 $script:DocPathRe = '(^|[\\/])docs[\\/]|\.(md|txt)$'
@@ -1135,7 +1135,7 @@ function Get-TimingRow($data, $snap, [string]$root) {
     $qStops = 0; try { $qStops = [int](Get-Prop $snap 'stops') } catch { $qStops = 0 }
     $qRet = [Math]::Max(0, $(if ($qStops -lt 1) { 1 } else { $qStops }) - 1)
     $qCompl = '0'; if ((Get-Prop $snap 'complaint') -eq $true) { $qCompl = '1' }
-    $cells += @([string]$qCode, [string]$qDocs, [string]$qRep, [string]$qAgents, $qAgentS.ToString('0', $script:Inv), [string]$qRet, $qCompl, (Get-CsvCell (Read-KitVersion $root)))
+    $cells += @([string]$qCode, [string]$qDocs, [string]$qRep, [string]$qAgents, $qAgentS.ToString('0', $script:Inv), [string]$qRet, $qCompl, (Get-CsvCell (Read-KitVersion $root)), (Get-CsvCell (Get-Prop $snap 'boot')))
     return ($cells -join ';')
 }
 function Get-TimingPath([string]$root) {
@@ -1669,7 +1669,7 @@ function Invoke-TurnStart($data) {
     $isStatus = Test-StatusQuestion $promptRaw
     $isAnswer = (-not $isStatus) -and (Test-Question $promptRaw)
     $isOk = ($promptRaw.Trim().Length -le 24) -and [regex]::IsMatch($promptRaw.Trim(), $script:OkRe, 'IgnoreCase')
-    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); check = [regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
+    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); boot = (Get-BootOnce $data); check = [regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -2124,6 +2124,16 @@ function Get-InterfaceNotice([string]$root) {
     if (-not [regex]::IsMatch($txt, 'интерфейс\s*:\s*(да|есть)', 'IgnoreCase')) { return '' }
     return 'Проект с интерфейсом: вид проверяется только через браузер (снимок экрана), не чтением вёрстки. Браузерных инструментов в сеансе нет — предложить владельцу подключить их первой строкой.'
 }
+function Get-BootOnce($data) {
+    # Отметка «сеанс начался с clear / compact / startup» читается один раз — первым ходом после события.
+    try {
+        $p = Get-StateFile $data 'boot'
+        if (-not (Test-Path -LiteralPath $p)) { return '' }
+        $s = [string](Get-Prop ((Get-Content -LiteralPath $p -Raw -Encoding UTF8) | ConvertFrom-Json) 'src')
+        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+        return $s
+    } catch { return '' }
+}
 function Invoke-SessionStart($data) {
     $root = Get-ProjectDir $data
     $src = [string](Get-Prop $data 'source')
@@ -2131,6 +2141,7 @@ function Invoke-SessionStart($data) {
     $statePath = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
     Clear-OldState $data
     [void](Set-SessionClaim $data $root)
+    try { $bs = $src; if (-not $bs) { $bs = 'startup' }; (@{ src = $bs } | ConvertTo-Json -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'boot') -Encoding UTF8 } catch {}
     if ([System.IO.File]::Exists((Join-Path $root 'INSTALL.md')) -and [System.IO.File]::Exists((Join-Path $root 'VERSION'))) {
         $lines += ('Это исходник набора claude-starter (версия ' + (Read-KitVersion $root) + '), не проект: не устанавливать и не заполнять docs/ai. Работа здесь — /kit-harvest (уроки из проектов), выпуск версий.')
     }
