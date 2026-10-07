@@ -27,7 +27,7 @@
   ".claude/hooks/tests/run_tests.py": "636f07e2bb4f9dbe",
   ".claude/hooks/turn-start.ps1": "b74ff7ea72c2afc1",
   ".claude/rules/code-headers.md": "10d9a1f4300138ac",
-  ".claude/rules/code.md": "71a104b62fd845e7",
+  ".claude/rules/code.md": "da81fa8acf18dce8",
   ".claude/rules/deploy.md": "5bf0eb74b9188b30",
   ".claude/rules/layout.md": "e799f16359ea06ea",
   ".claude/rules/owner-data.md": "a51e89a1bb656ce2",
@@ -79,5 +79,5 @@
  },
  "installed": "2026-10-07",
  "source": ".",
- "version": "2.39.0"
+ "version": "2.39.1"
 }
