@@ -51,7 +51,7 @@
   ".claude/skills/kit-update/SKILL.md": "b9d618c28a9097ac",
   ".claude/skills/layout-check/SKILL.md": "d0b695e4c53d992a",
   ".claude/skills/layout-check/layout-check.js": "31481ea4d79522c0",
-  ".claude/skills/new-feature/SKILL.md": "91f208f8d209d56d",
+  ".claude/skills/new-feature/SKILL.md": "911258787e03f1e2",
   ".claude/skills/project-adopt/SKILL.md": "f88c6924bdb279db",
   ".claude/skills/project-foundation/SKILL.md": "1b0801b27ff712e8",
   ".claude/skills/project-foundation/base.css": "e78c96d02a5830be",
@@ -76,7 +76,7 @@
   "STARTER.md": "4b207b1ccbc0f818",
   "gitignore.starter": "f35db2489e11877e"
  },
- "installed": "2026-10-03",
+ "installed": "2026-10-07",
  "source": ".",
- "version": "2.35.1"
+ "version": "2.35.2"
 }
