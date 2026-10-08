@@ -1690,6 +1690,7 @@ function Invoke-TurnStart($data) {
     if ($isExact) { Write-Out $script:ExactHint }
     if ([regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase') -and -not (Test-KitFull)) { Write-Out $script:CheckHint }
     if ([regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase')) { Write-Out $script:ComplaintHint }
+    $dh = Get-DocsHeavyHint $root; if ($dh) { Write-Out $dh }
     if ([regex]::IsMatch($promptRaw, $script:LiteralRe, 'IgnoreCase') -and -not $promptRaw.TrimStart().StartsWith('/')) { Write-Out $script:LiteralHint }
     $ctxHint = Get-ContextHint $root
     if ($ctxHint) { Write-Out $ctxHint }
@@ -2138,6 +2139,18 @@ function Get-InterfaceNotice([string]$root) {
     try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8) } catch { return '' }
     if (-not [regex]::IsMatch($txt, 'интерфейс\s*:\s*(да|есть)', 'IgnoreCase')) { return '' }
     return 'Проект с интерфейсом: вид проверяется только через браузер (снимок экрана), не чтением вёрстки. Браузерных инструментов в сеансе нет — предложить владельцу подключить их первой строкой.'
+}
+function Get-DocsHeavyHint([string]$root) {
+    # Прошлый ход ушёл в документы: шесть правок и больше, и вдвое больше, чем в код (Bass 08.10: 12 к 4).
+    if (Test-KitFull) { return '' }
+    $rows = @(Get-TimingTail (Get-TimingPath $root) 1)
+    if ($rows.Count -eq 0) { return '' }
+    $p = @($rows[$rows.Count - 1] -split ';')
+    if ($p.Count -lt 20) { return '' }
+    $code = 0; $docs = 0
+    if (-not [int]::TryParse($p[18], [ref]$code) -or -not [int]::TryParse($p[19], [ref]$docs)) { return '' }
+    if ($docs -ge 6 -and $docs -gt 2 * $code) { return ('Набор: в прошлом ходе правок в документы ' + $docs + ', в код ' + $code + ' — писанина съела ход. В быстром режиме документы — одна строка в STATE.md в конце темы; находки — одной строкой туда, где их будут искать, без пересказа хода работы. Сейчас — делать то, что просит владелец, в коде.' + "`n") }
+    return ''
 }
 function Get-BootOnce($data) {
     # Отметка «сеанс начался с clear / compact / startup» читается один раз — первым ходом после события.

@@ -1175,6 +1175,22 @@ COMPLAINT_HINT = 'Набор: это претензия — прошлый хо�
 DOC_PATH_RE = re.compile(r'(^|[\\/])docs[\\/]|\.(md|txt)$', re.I)
 
 
+DOCS_HEAVY_HINT = 'Набор: в прошлом ходе правок в документы %s, в код %s — писанина съела ход. В быстром режиме документы — одна строка в STATE.md в конце темы; находки — одной строкой туда, где их будут искать, без пересказа хода работы. Сейчас — делать то, что просит владелец, в коде.'
+
+
+def docs_heavy_hint(root):
+    # Прошлый ход ушёл в документы: шесть правок и больше, и вдвое больше, чем в код (Bass 08.10: 12 к 4).
+    rows = timing_tail(timing_path(root), 1)
+    if not rows or kit_full():
+        return ''
+    p = rows[-1].split(';')
+    try:
+        code, docs = int(p[18]), int(p[19])
+    except Exception:
+        return ''
+    return (DOCS_HEAVY_HINT % (docs, code) + '\n') if docs >= 6 and docs > 2 * code else ''
+
+
 def take_boot(data):
     # Отметка «сеанс начался с clear / compact / startup» читается один раз — первым ходом после события.
     p = state_file(data, 'boot')
@@ -2091,6 +2107,9 @@ def turn_start(data):
         sys.stdout.write(CHECK_HINT)
     if snap['complaint']:
         sys.stdout.write(COMPLAINT_HINT)
+    dh = docs_heavy_hint(root)
+    if dh:
+        sys.stdout.write(dh)
     if LITERAL_RE.search(prompt_raw) and not prompt_raw.lstrip().startswith('/'):
         sys.stdout.write(LITERAL_HINT)
     ctx = context_hint(root)
