@@ -1714,7 +1714,7 @@ function Invoke-TurnStart($data) {
     if ($hasSecret) { Write-Out $script:SecretHint }
     if (-not $prompt.StartsWith('<')) { $ih = Get-IndexHint $root $prompt; if ($ih) { Write-Out $ih } }
     if ($isStatus) { Write-Out $script:StatusHint }
-    elseif ($isAnswer) { Write-Out $script:AnswerHint }
+    elseif ($isAnswer) { Write-Out $script:AnswerHint; $wh = Get-WhyHint $root $promptRaw; if ($wh) { Write-Out $wh } }
     elseif ($snap.mixed) { Write-Out $script:MixedHint }
     elseif ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
     if ($isExact) { Write-Out $script:ExactHint }
@@ -2181,6 +2181,38 @@ function Get-DocsHeavyHint([string]$root) {
     if (-not [int]::TryParse($p[18], [ref]$code) -or -not [int]::TryParse($p[19], [ref]$docs)) { return '' }
     if ($docs -ge 6 -and $docs -gt 2 * $code) { return ('Набор: в прошлом ходе правок в документы ' + $docs + ', в код ' + $code + ' — писанина съела ход. В быстром режиме документы — одна строка в STATE.md в конце темы; находки — одной строкой туда, где их будут искать, без пересказа хода работы. Сейчас — делать то, что просит владелец, в коде.' + "`n") }
     return ''
+}
+$script:WhyRe = '(^|[\s.,!?…])(а\s+)?(почему|зачем|откуда|с\s+чего|кто\s+(просил|сказал))\b'
+$script:WhyStop = @('почем', 'зачем', 'откуд', 'сейча', 'тепер', 'должн', 'нужно', 'будет', 'этого', 'такой', 'котор', 'опять', 'снова', 'всегд', 'вообщ', 'просто', 'проси', 'сдела', 'делае', 'потом', 'почти', 'когда', 'чтобы', 'тольк', 'можно', 'здесь', 'тогда', 'никак', 'ничег', 'видно', 'стало')
+$script:WhyHint = 'Набор: «почему так» — сначала найти, откуда это взялось: просьба владельца в журнале (ниже, если нашлась), DECISIONS.md, `git log`. Ответ одной-двумя строками: «Так сделано <дата> по вашей просьбе: «<его слова>». Поменять на <что>?» Владелец не просил, решил Claude — так и сказать: «это я решил сам <дата>, вы не просили; вернуть / поменять на <что>?» Без правок до его ответа.'
+function Get-WhyStems([string]$text) {
+    $set = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($m in [regex]::Matches($text.ToLowerInvariant().Replace('ё', 'е'), '[a-zа-яё0-9]{4,}')) {
+        $w = $m.Value.Substring(0, [Math]::Min(5, $m.Value.Length)); if ($script:WhyStop -notcontains $w) { [void]$set.Add($w) }
+    }
+    return ,$set
+}
+function Get-WhyOrigin([string]$root, [string]$prompt) {
+    # Прошлые сообщения владельца из timing.csv, больше всего общих основ слов с вопросом: дата и текст.
+    $q = Get-WhyStems $prompt
+    if ($q.Count -lt 1) { return @() }
+    $found = New-Object System.Collections.Generic.List[object]
+    foreach ($row in @(Get-TimingTail (Get-TimingPath $root) 1500)) {
+        $c = @($row -split ';')
+        if ($c.Count -lt 18 -or -not $c[17].Trim()) { continue }
+        $st = Get-WhyStems $c[17]; $n = 0
+        foreach ($x in $q) { if ($st.Contains($x)) { $n++ } }
+        if ($n -ge 2 -or ($n -ge 1 -and $q.Count -le 2)) { $found.Add([pscustomobject]@{ n = $n; d = $c[0]; t = $c[17].Trim() }) }
+    }
+    $best = @($found | Sort-Object @{ Expression = 'n'; Descending = $true }, @{ Expression = 'd'; Descending = $true } | Select-Object -First 3 | Sort-Object d)
+    return @($best | ForEach-Object { $(if ($_.d.Length -gt 16) { $_.d.Substring(0, 16) } else { $_.d }) + ' — «' + $_.t + '»' })
+}
+function Get-WhyHint([string]$root, [string]$prompt) {
+    if (-not [regex]::IsMatch($prompt, $script:WhyRe, 'IgnoreCase')) { return '' }
+    $lines = @(Get-WhyOrigin $root $prompt)
+    $out = $script:WhyHint
+    if ($lines.Count -gt 0) { $out += "`n" + 'Похожие просьбы владельца из журнала (проверить, что это то самое):' + (($lines | ForEach-Object { "`n- " + $_ }) -join '') }
+    return $out
 }
 function Get-BootOnce($data) {
     # Отметка «сеанс начался с clear / compact / startup» читается один раз — первым ходом после события.

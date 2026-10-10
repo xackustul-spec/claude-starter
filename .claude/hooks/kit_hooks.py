@@ -1191,6 +1191,53 @@ def docs_heavy_hint(root):
     return (DOCS_HEAVY_HINT % (docs, code) + '\n') if docs >= 6 and docs > 2 * code else ''
 
 
+# «Почему так?» о том, что уже сделано: найти в журнале, когда и какими словами владелец это просил.
+# Слова владельца 10.10.2026: «когда я действительно просил, то в этот момент была у меня сама мысль почему…
+# ответ может быть так: вы же сами просили тогда-то таким текстом. Хотите поменять?»
+WHY_RE = re.compile(r'(^|[\s.,!?…])(а\s+)?(почему|зачем|откуда|с\s+чего|кто\s+(просил|сказал))\b', re.I)
+WHY_STOP = {'почем', 'зачем', 'откуд', 'сейча', 'тепер', 'должн', 'нужно', 'будет', 'этого', 'такой', 'котор', 'опять',
+            'снова', 'всегд', 'вообщ', 'просто', 'проси', 'сдела', 'делае', 'потом', 'почти', 'когда', 'чтобы',
+            'тольк', 'можно', 'здесь', 'тогда', 'никак', 'ничег', 'видно', 'стало'}
+WHY_HINT = ('Набор: «почему так» — сначала найти, откуда это взялось: просьба владельца в журнале (ниже, если нашлась), '
+            'DECISIONS.md, `git log`. Ответ одной-двумя строками: «Так сделано <дата> по вашей просьбе: «<его слова>». '
+            'Поменять на <что>?» Владелец не просил, решил Claude — так и сказать: «это я решил сам <дата>, вы не '
+            'просили; вернуть / поменять на <что>?» Без правок до его ответа.\n')
+
+
+def why_stems(text):
+    words = re.findall(r'[a-zа-яё0-9]{4,}', str(text).lower().replace('ё', 'е'))
+    return {w[:5] for w in words if w[:5] not in WHY_STOP}
+
+
+def why_origin(root, prompt, top=3):
+    # Прошлые сообщения владельца из timing.csv, больше всего общих основ слов с вопросом: дата и текст.
+    q = why_stems(prompt)
+    if len(q) < 1:
+        return []
+    found = []
+    for row in timing_tail(timing_path(root), 1500):
+        c = row.split(';')
+        if len(c) < 18 or not c[17].strip():
+            continue
+        n = len(q & why_stems(c[17]))
+        if n >= 2 or (n >= 1 and len(q) <= 2):
+            found.append((n, c[0], c[17].strip()))
+    found.sort(key=lambda x: x[1], reverse=True)  # при равном счёте — свежее
+    found.sort(key=lambda x: -x[0])
+    best = sorted(found[:top], key=lambda x: x[1])
+    return ['%s — «%s»' % (d[:16], t) for _, d, t in best]
+
+
+def why_hint(root, prompt):
+    if not WHY_RE.search(prompt):
+        return ''
+    lines = why_origin(root, prompt)
+    out = WHY_HINT
+    if lines:
+        out += 'Похожие просьбы владельца из журнала (проверить, что это то самое):\n' + ''.join('- %s\n' % x for x in lines)
+    return out
+
+
 def take_boot(data):
     # Отметка «сеанс начался с clear / compact / startup» читается один раз — первым ходом после события.
     p = state_file(data, 'boot')
@@ -2157,6 +2204,9 @@ def turn_start(data):
         sys.stdout.write(STATUS_HINT)
     elif snap['answer']:
         sys.stdout.write(ANSWER_HINT % ANSWER_LOOK_MAX)
+        wh = why_hint(root, prompt_raw)
+        if wh:
+            sys.stdout.write(wh)
     elif snap['mixed']:
         sys.stdout.write(MIXED_HINT)
     elif VAGUE_RE.search(prompt):

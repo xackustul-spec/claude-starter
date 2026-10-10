@@ -583,6 +583,16 @@ def scenarios(impl, ps, tmp):
     s10q = f'{impl}-answer-{os.getpid()}'
     d10q = {'session_id': s10q, 'cwd': r, 'scratchpad_dir': os.path.join(tmp, 'state')}
     S('ответ: «как так? они вошли несколько дней назад?» — подсказка', 'turn-start', dict(d10q, prompt='как так? они вошли несколько дней назад?'), r, 'ctx', 'ответ первой строкой')
+    write(r, 'docs/ai/timing.csv', 'начало;всего_с;инструменты_с;модель_с;вызовов;запросов;вход_т;кэш_чт_т;кэш_зап_т;выход_т;думал_т;модель;усилие;скорость;вне_папки;инструменты;куда смотрел;вопрос\n'
+          '2026-10-05 14:02:11;10;1;9;1;1;0;0;0;0;0;sonnet;medium;standard;0;Edit*1;x;сделай фото клиента круглым\n'
+          '2026-10-06 10:00:00;10;1;9;1;1;0;0;0;0;0;sonnet;medium;standard;0;Edit*1;x;поправь отчёт за март\n')
+    S('почему: нашлась просьба владельца — дата и слова', 'turn-start', dict(d10q, prompt='зачем фото клиента круглое?'), r, 'ctx', '2026-10-05 14:02 — «сделай фото клиента круглым»')
+    if 'отчёт за март' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'лишняя просьба', 'только про фото', out[-1][4], '')
+    S('почему: без «почему» — журнал не ищется', 'turn-start', dict(d10q, prompt='фото клиента круглое?'), r, 'ctx')
+    if 'Похожие просьбы' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'лишний поиск', 'без поиска', out[-1][4], '')
+    os.remove(os.path.join(r, 'docs/ai/timing.csv'))
     S('ответ: Edit — отказ', 'pre-answer', dict(d10q, tool_name='Edit', tool_input={'file_path': r + '/src/x.py', 'old_string': 'a', 'new_string': 'b'}), r, 'deny', 'только ответ словами')
     S('ответ: KNOWLEDGE — можно', 'pre-answer', dict(d10q, tool_name='Edit', tool_input={'file_path': r + '/docs/ai/KNOWLEDGE.md', 'old_string': 'a', 'new_string': 'b'}), r, 'allow')
     S('ответ: субагент — отказ', 'pre-answer', dict(d10q, tool_name='Agent', tool_input={'prompt': 'x'}), r, 'deny', 'без субагента')
