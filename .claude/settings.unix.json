@@ -142,6 +142,16 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Read|Grep|Glob|WebFetch|WebSearch|Agent|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR}/.claude/hooks/run.sh\" pre-answer",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PostToolUse": [

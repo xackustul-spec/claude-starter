@@ -579,6 +579,23 @@ def scenarios(impl, ps, tmp):
     S('вопрос: «сделай кнопку серой» — не вопрос', 'turn-start', dict(d10, prompt='сделай кнопку серой, как у остальных?'), r, 'ctx')
     if 'это вопрос' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
+    # pre-answer: отдельный лёгкий хук хода-вопроса — правки, субагент и шестое обращение не проходят
+    s10q = f'{impl}-answer-{os.getpid()}'
+    d10q = {'session_id': s10q, 'cwd': r, 'scratchpad_dir': os.path.join(tmp, 'state')}
+    S('ответ: «как так? они вошли несколько дней назад?» — подсказка', 'turn-start', dict(d10q, prompt='как так? они вошли несколько дней назад?'), r, 'ctx', 'ответ первой строкой')
+    S('ответ: Edit — отказ', 'pre-answer', dict(d10q, tool_name='Edit', tool_input={'file_path': r + '/src/x.py', 'old_string': 'a', 'new_string': 'b'}), r, 'deny', 'только ответ словами')
+    S('ответ: KNOWLEDGE — можно', 'pre-answer', dict(d10q, tool_name='Edit', tool_input={'file_path': r + '/docs/ai/KNOWLEDGE.md', 'old_string': 'a', 'new_string': 'b'}), r, 'allow')
+    S('ответ: субагент — отказ', 'pre-answer', dict(d10q, tool_name='Agent', tool_input={'prompt': 'x'}), r, 'deny', 'без субагента')
+    S('ответ: scp — отказ', 'pre-answer', dict(d10q, tool_name='Bash', tool_input={'command': 'scp a host:/tmp/'}), r, 'deny', 'только ответ словами')
+    for i in range(5):
+        S(f'ответ: обращение {i + 1} — можно', 'pre-answer', dict(d10q, tool_name='Grep', tool_input={'pattern': 'x'}), r, 'allow')
+    S('ответ: шестое обращение — хватит искать', 'pre-answer', dict(d10q, tool_name='Read', tool_input={'file_path': r + '/a'}), r, 'deny', 'хватит искать')
+    S('ответ: вопрос и задание — подсказка «сначала ответ»', 'turn-start',
+      dict(d10q, prompt='а еще .. как мы будем делить права, если надо дать только один клуб? и поправь страницу, она всегда одна'), r, 'ctx', 'и вопрос, и задание')
+    S('ответ: в ход-задание pre-answer молчит', 'pre-answer', dict(d10q, tool_name='Edit', tool_input={'file_path': r + '/src/x.py', 'old_string': 'a', 'new_string': 'b'}), r, 'allow')
+    S('ответ: «теперь делай столб время входа» — не вопрос и не смесь', 'turn-start', dict(d10q, prompt='теперь делай столб время входа'), r, 'ctx')
+    if 'это вопрос' in out[-1][4] or 'и вопрос, и задание' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
     S('готовность: следующий ход — Write снова можно', 'pre-write',
       dict(d10, tool_name='Write', tool_input={'file_path': r + '/src/x.py', 'content': 'x'}), r, 'ctx', 'Правила проекта')
 

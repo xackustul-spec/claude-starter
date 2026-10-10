@@ -184,6 +184,23 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash|PowerShell|Read|Grep|Glob|WebFetch|WebSearch|Agent|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell.exe",
+            "args": [
+              "-NoProfile",
+              "-ExecutionPolicy",
+              "Bypass",
+              "-File",
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/pre-answer.ps1"
+            ],
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PostToolUse": [

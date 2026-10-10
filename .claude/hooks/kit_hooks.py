@@ -1794,17 +1794,28 @@ STATUS_HINT = ('Набор: владелец спрашивает о готов�
 
 
 # Вопрос, а не задание: ответить словами, правок не делать; нужна работа — спросить «сделать?» и закончить ход.
-QUESTION_RE = re.compile(r'(\?\s*$|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|'
-                         r'это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли)\b)', re.I)
+QUESTION_RE = re.compile(r'(\?\s*$|\?\s|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|'
+                         r'это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли|скажи|объясни|расскажи|подскажи|'
+                         r'тоесть|то есть|а если|если)\b)', re.I)
 WORK_RE = re.compile(r'\b(сделай|сделать|добавь|добавить|исправь|исправить|убери|убрать|поправь|поправить|замени|'
                      r'заменить|проверь|проверить|запусти|выложи|перенеси|напиши|создай|удали|обнови|продолжай|'
                      r'доделай|делай|давай|разбей|подключи|настрой|почини|верни)\b', re.I)
-ANSWER_HINT = ('Набор: это вопрос, а не задание. Ответить словами — из головы, STATE и одного взгляда в код (Read/Grep '
-               'можно); правок, команд с записью и коммитов в этом ходе нет (хук не пропустит). Чтобы ответить, нужна '
-               'работа, или неясно, ответ нужен или работа, — спросить одной строкой «сделать: <что>?» и закончить ход; '
-               'его «да» откроет.\n')
+ANSWER_HINT = ('Набор: это вопрос, а не задание — ответ первой строкой, сразу. Откуда брать, по порядку: переписка → '
+               'документы проекта (STATE, KNOWLEDGE, project.md, нужный файл по INDEX) → один поиск в коде (Grep). '
+               'Обращений к файлам и командам — не больше %d; ни субагентов, ни правок кода, ни команд с записью (хук не '
+               'пропустит). Не нашёл — так и сказать: «в <где смотрел> этого нет», и «поискать дальше?». Ответ пришлось '
+               'искать в коде, а факт надолго — одна строка в KNOWLEDGE.md «вопрос → ответ (где в коде)», чтобы в '
+               'следующий раз он был в документах. Для ответа нужна работа или неясно, ответ нужен или работа, — '
+               'одной строкой «сделать: <что>?» и закончить ход; его «да» откроет.\n')
 ANSWER_DENY = ('Ход начался с вопроса владельца — в нём только ответ словами. Нужна работа — спроси одной строкой '
                '«сделать: <что>?» и закончи ход; его «да» следующим сообщением откроет этот вызов.')
+ANSWER_LOOK_MAX = 5
+ANSWER_LOOK_DENY = ('Вопрос владельца, а обращений уже %d — хватит искать. Ответь сейчас тем, что нашёл; чего не нашёл — '
+                    'скажи, где смотрел, и спроси «поискать дальше?».')
+ANSWER_AGENT_DENY = ('Ход — вопрос владельца: отвечай сам, из документов проекта и одного поиска в коде, без субагента. '
+                     'Ответ требует большой разведки — спроси «сделать: <что>?» и закончи ход.')
+MIXED_HINT = ('Набор: в сообщении и вопрос, и задание. Первым абзацем ответа — прямой ответ на вопрос (из документов '
+              'проекта, без новой работы ради него), потом — задание ровно в названных словах.\n')
 
 
 CHAT_PREFIX_RE = re.compile(r'^\W*(чат|chat)\s*[:：]', re.I)
@@ -1815,6 +1826,17 @@ def is_question(prompt):
     if CHAT_PREFIX_RE.match(p):
         return True  # «чат: …» — режим ответа принудительно, какие бы глаголы ни были дальше
     return bool(p) and len(p) <= 300 and bool(QUESTION_RE.search(p)) and not WORK_RE.search(p) and not p.startswith('<')
+
+
+MIXED_Q_RE = re.compile(r'\?|(^|[.!…]\s*)(а\s+)?(что|как|почему|зачем|где|сколько|можно ли|есть ли|какой|какая|какие)\s', re.I)
+
+
+def is_mixed(prompt):
+    # Вопрос внутри задания: «как мы будем делить права… и вот ещё поправь» — ответ на вопрос не должен утонуть в работе.
+    p = prompt.strip()
+    if not p or p.startswith('<') or is_question(p):
+        return False
+    return bool(MIXED_Q_RE.search(p)) and bool(WORK_RE.search(p) or COMPLAINT_RE.search(p) or len(p) > 300)
 
 
 def is_status_question(prompt):
@@ -1857,6 +1879,40 @@ def guard_status_shell(cmd, data):
             deny(STATUS_DENY)
         if snap.get('answer'):
             deny(ANSWER_DENY)
+
+
+LOOK_TOOLS_RE = re.compile(r'^(Read|Grep|Glob|Bash|PowerShell|WebFetch|WebSearch|mcp__.*)$')
+
+
+def pre_answer(data):
+    # Отдельный лёгкий хук PreToolUse: работает только в ход-вопрос (и вопрос о готовности). Ничего не спрашивает —
+    # только отказывает с причиной: правки кода и команды с записью, субагент, больше ANSWER_LOOK_MAX обращений.
+    # Повод: Bass 08.10.2026 — вопрос «как мы будем делить права…» превратился в 529 с и 75 вызовов.
+    snap = turn_snap(data)
+    if not (snap.get('answer') or snap.get('ready_q')):
+        return
+    tool = str(data.get('tool_name') or '')
+    ti = data.get('tool_input') or {}
+    if tool in ('Write', 'Edit', 'MultiEdit', 'NotebookEdit'):
+        guard_status_write(data)
+        return
+    if tool in ('Agent', 'Task'):
+        if snap.get('answer'):
+            deny(ANSWER_AGENT_DENY)
+        return
+    if tool in ('Bash', 'PowerShell'):
+        guard_status_shell(str(ti.get('command') or ''), data)
+    if not snap.get('answer') or not LOOK_TOOLS_RE.match(tool):
+        return
+    n = int(snap.get('looks') or 0) + 1
+    if n > ANSWER_LOOK_MAX:
+        deny(ANSWER_LOOK_DENY % (n - 1))
+    snap['looks'] = n
+    try:
+        with open(state_file(data, 'turn'), 'w', encoding='utf-8') as fh:
+            json.dump(snap, fh)
+    except Exception:
+        pass
 
 
 # ------------------------------------------- проверяющий интерфейса: менялись экраны — ui-checker обязан сходить
@@ -2070,6 +2126,8 @@ def turn_start(data):
             'check': bool(CHECK_RE.search(prompt_raw)),
             'ready_q': is_status_question(prompt_raw),
             'answer': (not is_status_question(prompt_raw)) and is_question(prompt_raw),
+            'mixed': is_mixed(prompt_raw),
+            'looks': 0,
             'ok': bool(OK_RE.match(prompt_raw.strip())) and len(prompt_raw.strip()) <= 24,
             'prompt': mask_secrets(re.sub(r'\s+', ' ', prompt_raw).strip())[:140]}
     head = git(root, 'rev-parse', 'HEAD')
@@ -2098,7 +2156,9 @@ def turn_start(data):
     if snap['ready_q']:
         sys.stdout.write(STATUS_HINT)
     elif snap['answer']:
-        sys.stdout.write(ANSWER_HINT)
+        sys.stdout.write(ANSWER_HINT % ANSWER_LOOK_MAX)
+    elif snap['mixed']:
+        sys.stdout.write(MIXED_HINT)
     elif VAGUE_RE.search(prompt):
         sys.stdout.write(VAGUE_HINT)
     if snap['exact']:
@@ -2724,7 +2784,7 @@ COMMANDS = {
     'guard-shell': guard_shell, 'guard-cyrillic': guard_cyrillic, 'guard-instructions': guard_instructions,
     'rules-on-write': rules_on_write, 'check-python': check_python, 'turn-start': turn_start,
     'session-start': session_start, 'check-docs': check_docs, 'pre-write': pre_write, 'pre-read': guard_read,
-    'read-budget': read_budget, 'pre-agent': pre_agent,
+    'read-budget': read_budget, 'pre-agent': pre_agent, 'pre-answer': pre_answer,
 }
 
 if __name__ == '__main__':

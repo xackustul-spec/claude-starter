@@ -1464,10 +1464,39 @@ $script:StatusWorkRe = '\b(сделай|доделай|делай|продолж
 $script:StatusHint = 'Набор: владелец спрашивает о готовности. В этом ходе — только ответ, по таблице готовности (часть · сделано · проверено · сверил владелец): да/нет, что осталось списком, сколько это займёт. Таблицы нет — составить её сейчас в документе главной задачи и ответить по ней. Правки файлов, команды на сервер и коммиты в этом ходе запрещены (хук не пропустит); работа — следующим ходом, после его слова.'
 $script:StatusDeny = 'Ход начался с вопроса владельца о готовности — в нём только ответ по таблице готовности, без правок и команд, которые что-то меняют. Ответь сейчас; работу — следующим ходом, когда он скажет.'
 $script:ChangeCmdRe = '(^|[\s;&|("''])(scp|rsync|patch|tee|sed\s+-i|git\s+(commit|push|apply)|docker\s+(compose\s+)?(build|up|restart)|npm\s+run\s+build|cp|mv|Set-Content|Out-File|Add-Content)\b|>\s*(?!&|/dev/null)\S'
-$script:QuestionRe = '(\?\s*$|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли)\b)'
+$script:QuestionRe = '(\?\s*$|\?\s|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли|скажи|объясни|расскажи|подскажи|тоесть|то есть|а если|если)\b)'
 $script:WorkRe = '\b(сделай|сделать|добавь|добавить|исправь|исправить|убери|убрать|поправь|поправить|замени|заменить|проверь|проверить|запусти|выложи|перенеси|напиши|создай|удали|обнови|продолжай|доделай|делай|давай|разбей|подключи|настрой|почини|верни)\b'
-$script:AnswerHint = 'Набор: это вопрос, а не задание. Ответить словами — из головы, STATE и одного взгляда в код (Read/Grep можно); правок, команд с записью и коммитов в этом ходе нет (хук не пропустит). Чтобы ответить, нужна работа, или неясно, ответ нужен или работа, — спросить одной строкой «сделать: <что>?» и закончить ход; его «да» откроет.'
+$script:AnswerLookMax = 5
+$script:AnswerHint = 'Набор: это вопрос, а не задание — ответ первой строкой, сразу. Откуда брать, по порядку: переписка → документы проекта (STATE, KNOWLEDGE, project.md, нужный файл по INDEX) → один поиск в коде (Grep). Обращений к файлам и командам — не больше ' + $script:AnswerLookMax + '; ни субагентов, ни правок кода, ни команд с записью (хук не пропустит). Не нашёл — так и сказать: «в <где смотрел> этого нет», и «поискать дальше?». Ответ пришлось искать в коде, а факт надолго — одна строка в KNOWLEDGE.md «вопрос → ответ (где в коде)», чтобы в следующий раз он был в документах. Для ответа нужна работа или неясно, ответ нужен или работа, — одной строкой «сделать: <что>?» и закончить ход; его «да» откроет.'
 $script:AnswerDeny = 'Ход начался с вопроса владельца — в нём только ответ словами. Нужна работа — спроси одной строкой «сделать: <что>?» и закончи ход; его «да» следующим сообщением откроет этот вызов.'
+$script:AnswerLookDeny = 'Вопрос владельца, а обращений уже {0} — хватит искать. Ответь сейчас тем, что нашёл; чего не нашёл — скажи, где смотрел, и спроси «поискать дальше?».'
+$script:AnswerAgentDeny = 'Ход — вопрос владельца: отвечай сам, из документов проекта и одного поиска в коде, без субагента. Ответ требует большой разведки — спроси «сделать: <что>?» и закончи ход.'
+$script:MixedHint = 'Набор: в сообщении и вопрос, и задание. Первым абзацем ответа — прямой ответ на вопрос (из документов проекта, без новой работы ради него), потом — задание ровно в названных словах.'
+$script:MixedQRe = '\?|(^|[.!…]\s*)(а\s+)?(что|как|почему|зачем|где|сколько|можно ли|есть ли|какой|какая|какие)\s'
+$script:LookToolsRe = '^(Read|Grep|Glob|Bash|PowerShell|WebFetch|WebSearch|mcp__.*)$'
+function Test-Mixed([string]$prompt) {
+    # Вопрос внутри задания — ответ на вопрос не должен утонуть в работе.
+    $p = $prompt.Trim()
+    if (-not $p -or $p.StartsWith('<') -or (Test-Question $p)) { return $false }
+    if (-not [regex]::IsMatch($p, $script:MixedQRe, 'IgnoreCase')) { return $false }
+    return ([regex]::IsMatch($p, $script:WorkRe, 'IgnoreCase') -or [regex]::IsMatch($p, $script:ComplaintRe, 'IgnoreCase') -or $p.Length -gt 300)
+}
+function Invoke-PreAnswer($data) {
+    # Лёгкий хук PreToolUse только для хода-вопроса: ничего не спрашивает, только отказывает с причиной.
+    $snap = Get-TurnSnap $data
+    if (-not $snap) { return }
+    $isAns = (Get-Prop $snap 'answer') -eq $true
+    if (-not ($isAns -or (Get-Prop $snap 'ready_q') -eq $true)) { return }
+    $tool = [string](Get-Prop $data 'tool_name')
+    if ($tool -in @('Write', 'Edit', 'MultiEdit', 'NotebookEdit')) { Invoke-GuardStatusWrite $data; return }
+    if ($tool -in @('Agent', 'Task')) { if ($isAns) { Out-Deny $script:AnswerAgentDeny }; return }
+    if ($tool -in @('Bash', 'PowerShell')) { Invoke-GuardStatusShell ([string](Get-Prop (Get-Prop $data 'tool_input') 'command')) $data }
+    if (-not $isAns -or -not [regex]::IsMatch($tool, $script:LookToolsRe)) { return }
+    $n = 1; try { $n = [int](Get-Prop $snap 'looks') + 1 } catch { $n = 1 }
+    if ($n -gt $script:AnswerLookMax) { Out-Deny ($script:AnswerLookDeny -f ($n - 1)) }
+    $snap | Add-Member -NotePropertyName looks -NotePropertyValue $n -Force
+    try { ($snap | ConvertTo-Json -Depth 4 -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'turn') -Encoding UTF8 } catch {}
+}
 function Test-Question([string]$prompt) {
     $p = $prompt.Trim()
     if ([regex]::IsMatch($p, '^\W*(чат|chat)\s*[:：]', 'IgnoreCase')) { return $true }
@@ -1669,7 +1698,7 @@ function Invoke-TurnStart($data) {
     $isStatus = Test-StatusQuestion $promptRaw
     $isAnswer = (-not $isStatus) -and (Test-Question $promptRaw)
     $isOk = ($promptRaw.Trim().Length -le 24) -and [regex]::IsMatch($promptRaw.Trim(), $script:OkRe, 'IgnoreCase')
-    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); boot = (Get-BootOnce $data); check = [regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
+    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; mixed = (Test-Mixed $promptRaw); looks = 0; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); boot = (Get-BootOnce $data); check = [regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -1686,6 +1715,7 @@ function Invoke-TurnStart($data) {
     if (-not $prompt.StartsWith('<')) { $ih = Get-IndexHint $root $prompt; if ($ih) { Write-Out $ih } }
     if ($isStatus) { Write-Out $script:StatusHint }
     elseif ($isAnswer) { Write-Out $script:AnswerHint }
+    elseif ($snap.mixed) { Write-Out $script:MixedHint }
     elseif ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
     if ($isExact) { Write-Out $script:ExactHint }
     if ([regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase') -and -not (Test-KitFull)) { Write-Out $script:CheckHint }
