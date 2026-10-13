@@ -60,7 +60,14 @@
   }
   // 6. Надпись наезжает на надпись (в том числе выпавшие и приклеенные элементы).
   const texts = all.filter(el => !okFlag(el) && [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())).slice(0, 900);
-  const boxes = texts.map(el => { const rg = document.createRange(); rg.selectNodeContents(el); return [el, rg.getBoundingClientRect()]; });
+  // Прямоугольник текста режется рамками блоков с overflow hidden/clip (свой и предков): текст,
+  // обрезанный многоточием, на экране дальше своей рамки не виден и на соседа наехать не может.
+  const clipRect = (el, r) => { let b = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+    for (let p = el; p && p !== document.body; p = p.parentElement) { const s = cs(p);
+      if (/(hidden|clip)/.test(s.overflowX + s.overflowY)) { const pr = rect(p);
+        b = { left: Math.max(b.left, pr.left), top: Math.max(b.top, pr.top), right: Math.min(b.right, pr.right), bottom: Math.min(b.bottom, pr.bottom) }; } }
+    return b; };
+  const boxes = texts.map(el => { const rg = document.createRange(); rg.selectNodeContents(el); return [el, clipRect(el, rg.getBoundingClientRect())]; });
   for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
     const [a, ra] = boxes[i], [b, rb] = boxes[j];
     if (a.contains(b) || b.contains(a)) continue;
