@@ -1238,6 +1238,76 @@ def why_hint(root, prompt):
     return out
 
 
+# Куда поставить блок — слова владельца о месте переводятся в проверяемые координаты.
+# Повод: Bass 10–12.10 — «блок над…», «на уровне ФИО», «ниже линии», «границы списка», «проценты, а не px»:
+# 9 претензий из 20 за три дня, «приходится несколько часов объяснять одно и то же».
+PLACE_RE = re.compile(r'(^|[\s,.])(над|под|ниже|выше|на\s+уровн\w*|рядом|справа|слева|правее|левее|внутри|в\s+пределах|'
+                      r'границ\w*|передвин\w*|перемест\w*|подвин\w*|сдвин\w*|поставь|постав\w+\s+(над|под|рядом))(\s|[,.!?…]|$)', re.I)
+PLACE_HINT = ('Набор: просьба «куда поставить». Первой строкой ответа — «Положение: <что> — <над / под / на уровне / '
+              'внутри> <чего>, ширина N% от <родителя>»; слова допускают два места — один вопрос до правки. После правки '
+              '— в браузере window.KIT_PLACE=[[что, отношение, чего], …] и `.claude/skills/layout-check/place-check.js`, в '
+              'ответе строка «Положение: … ✓» с числами. Размеры — в % от родителя, не px.\n')
+PLACE_MSG = ('Просьба была «куда поставить», вёрстка правилась, а строки «Положение: … ✓/✗» с числами замера нет. Задай '
+             'window.KIT_PLACE (что, отношение, относительно чего), выполни `.claude/skills/layout-check/place-check.js` в '
+             'странице и допиши строку; ✗ — исправить, а не сдавать.')
+PLACE_DONE_RE = re.compile(r'положение\s*:[^\n]*[✓✗]', re.I)
+PLACE_FILE_RE = re.compile(r'\.(tsx|jsx|vue|svelte|css|scss|less|html?)$', re.I)
+
+
+def place_msgs(data, snap, since):
+    if not (snap or {}).get('place'):
+        return []
+    uses, _, _ = turn_tools(str(data.get('transcript_path') or ''), since)
+    ui = any(name in ('Write', 'Edit', 'MultiEdit') and PLACE_FILE_RE.search(str((inp or {}).get('file_path') or ''))
+             for name, inp, ts in uses.values() if isinstance(inp, dict))
+    if not ui:
+        return []
+    ans = last_answer(str(data.get('transcript_path') or ''), since)
+    return [] if (not ans or PLACE_DONE_RE.search(ans)) else [PLACE_MSG]
+
+
+# Тормозит / не работает — прямо к корню, а не сбор всего подряд. Повод: разбор 13.10.2026 — две недели логов
+# и 16 версий на то, что отладчик производителя показал за 15 минут (ждали внешний сервис).
+ROOT_RE = re.compile(r'тормоз|медленн|еле\s+(груз|работ|откр)|долго\s+(груз|откр|думает|работ)|не\s+(груз|открыва|работает)|'
+                     r'завис|подвиса|падает|упал[аои]?\b|вылета|ошибк(а|и|у|ой)?([\s,.!?]|$)|проблем\w*\s+с\s', re.I)
+ROOT_HINT = ('Набор: проблема — идти прямо к корню. 1) Вопрос одной строкой: что именно не так и где. 2) Штатный '
+             'инструмент диагностики этой системы первым (отладчик, профилировщик, журнал производителя, сетевая '
+             'вкладка браузера), а не логи вокруг. 3) Узел, где теряется время или ломается; ждут там или считают; '
+             'ждут — кого, имя и адрес. 4) Проверка — отключить подозреваемое целиком и замерить. Источник, который не '
+             'может содержать ответ, не читать; находка, не отвечающая на вопрос, — заметка, не доклад; «совпало по '
+             'времени» — не «вызвано».\n')
+
+# Вес того, что грузится в каждый сеанс: Bass 13.10 — 173 КБ документов, ~100 тыс. токенов сразу после /clear.
+LOAD_MAX = 40000
+
+
+def load_weight(root):
+    files = [os.path.join(root, 'docs', 'ai', n) for n in ('STATE.md', 'LESSONS.md', 'INDEX.md', 'PROFILE.md')]
+    rd = os.path.join(root, '.claude', 'rules')
+    try:
+        for n in sorted(os.listdir(rd)):
+            f = os.path.join(rd, n)
+            if n.endswith('.md') and os.path.isfile(f):
+                head = open(f, encoding='utf-8-sig', errors='replace').read(400)
+                if not re.search(r'^paths\s*:', head, re.M):
+                    files.append(f)
+    except Exception:
+        pass
+    sizes = []
+    for f in files:
+        try:
+            sizes.append((os.path.getsize(f), os.path.basename(f)))
+        except Exception:
+            pass
+    total = sum(x for x, _ in sizes)
+    if total <= LOAD_MAX:
+        return ''
+    top = ', '.join('%s %d КБ' % (n, round(x / 1000)) for x, n in sorted(sizes, reverse=True)[:3])
+    return ('Документы, которые грузятся в каждый сеанс: %d КБ (предел %d): %s. Это оплачивается в каждом запросе — '
+            'предложить владельцу сжать по `kit-compact`: правила без стенограммы, в STATE только текущее, история — '
+            'в docs/ai/archive/.' % (round(total / 1000), LOAD_MAX // 1000, top))
+
+
 def take_boot(data):
     # Отметка «сеанс начался с clear / compact / startup» читается один раз — первым ходом после события.
     p = state_file(data, 'boot')
@@ -1843,7 +1913,7 @@ STATUS_HINT = ('Набор: владелец спрашивает о готов�
 # Вопрос, а не задание: ответить словами, правок не делать; нужна работа — спросить «сделать?» и закончить ход.
 QUESTION_RE = re.compile(r'(\?\s*$|\?\s|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|'
                          r'это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли|скажи|объясни|расскажи|подскажи|'
-                         r'тоесть|то есть|а если|если)\b)', re.I)
+                         r'тоесть|то есть)\b)', re.I)
 WORK_RE = re.compile(r'\b(сделай|сделать|добавь|добавить|исправь|исправить|убери|убрать|поправь|поправить|замени|'
                      r'заменить|проверь|проверить|запусти|выложи|перенеси|напиши|создай|удали|обнови|продолжай|'
                      r'доделай|делай|давай|разбей|подключи|настрой|почини|верни)\b', re.I)
@@ -2174,6 +2244,7 @@ def turn_start(data):
             'ready_q': is_status_question(prompt_raw),
             'answer': (not is_status_question(prompt_raw)) and is_question(prompt_raw),
             'mixed': is_mixed(prompt_raw),
+            'place': bool(PLACE_RE.search(prompt_raw)) and not prompt_raw.lstrip().startswith('<'),
             'looks': 0,
             'ok': bool(OK_RE.match(prompt_raw.strip())) and len(prompt_raw.strip()) <= 24,
             'prompt': mask_secrets(re.sub(r'\s+', ' ', prompt_raw).strip())[:140]}
@@ -2213,6 +2284,10 @@ def turn_start(data):
         sys.stdout.write(VAGUE_HINT)
     if snap['exact']:
         sys.stdout.write(EXACT_HINT)
+    if snap['place'] and not snap['answer']:
+        sys.stdout.write(PLACE_HINT)
+    if ROOT_RE.search(prompt_raw) and not prompt_raw.lstrip().startswith('<'):
+        sys.stdout.write(ROOT_HINT)
     if snap['check'] and not kit_full():
         sys.stdout.write(CHECK_HINT)
     if snap['complaint']:
@@ -2294,13 +2369,13 @@ def check_docs(data):
     again = data.get('stop_hook_active') is True
     if fast_turn(snap):
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since)
+        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since) + place_msgs(data, snap, since)
         if msgs:
             stop_block(data, snap, ['Перед завершением: ' + ' '.join(msgs)], again)
         return
     # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
     task_msgs = (main_task_check(data, root, since) + ui_check_msgs(data, root, since)
-                 + ([] if again else where_msgs(data, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
+                 + ([] if again else where_msgs(data, since) + place_msgs(data, snap, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
                     + lessons_block_msgs(data, root)))
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
@@ -2630,6 +2705,9 @@ def session_start(data):
     if note:
         lines.append(note)
     note = interface_notice(root)
+    if note:
+        lines.append(note)
+    note = load_weight(root)
     if note:
         lines.append(note)
     lines.append('Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.')

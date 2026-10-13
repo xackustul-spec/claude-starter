@@ -1464,7 +1464,7 @@ $script:StatusWorkRe = '\b(сделай|доделай|делай|продолж
 $script:StatusHint = 'Набор: владелец спрашивает о готовности. В этом ходе — только ответ, по таблице готовности (часть · сделано · проверено · сверил владелец): да/нет, что осталось списком, сколько это займёт. Таблицы нет — составить её сейчас в документе главной задачи и ответить по ней. Правки файлов, команды на сервер и коммиты в этом ходе запрещены (хук не пропустит); работа — следующим ходом, после его слова.'
 $script:StatusDeny = 'Ход начался с вопроса владельца о готовности — в нём только ответ по таблице готовности, без правок и команд, которые что-то меняют. Ответь сейчас; работу — следующим ходом, когда он скажет.'
 $script:ChangeCmdRe = '(^|[\s;&|("''])(scp|rsync|patch|tee|sed\s+-i|git\s+(commit|push|apply)|docker\s+(compose\s+)?(build|up|restart)|npm\s+run\s+build|cp|mv|Set-Content|Out-File|Add-Content)\b|>\s*(?!&|/dev/null)\S'
-$script:QuestionRe = '(\?\s*$|\?\s|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли|скажи|объясни|расскажи|подскажи|тоесть|то есть|а если|если)\b)'
+$script:QuestionRe = '(\?\s*$|\?\s|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли|скажи|объясни|расскажи|подскажи|тоесть|то есть)\b)'
 $script:WorkRe = '\b(сделай|сделать|добавь|добавить|исправь|исправить|убери|убрать|поправь|поправить|замени|заменить|проверь|проверить|запусти|выложи|перенеси|напиши|создай|удали|обнови|продолжай|доделай|делай|давай|разбей|подключи|настрой|почини|верни)\b'
 $script:AnswerLookMax = 5
 $script:AnswerHint = 'Набор: это вопрос, а не задание — ответ первой строкой, сразу. Откуда брать, по порядку: переписка → документы проекта (STATE, KNOWLEDGE, project.md, нужный файл по INDEX) → один поиск в коде (Grep). Обращений к файлам и командам — не больше ' + $script:AnswerLookMax + '; ни субагентов, ни правок кода, ни команд с записью (хук не пропустит). Не нашёл — так и сказать: «в <где смотрел> этого нет», и «поискать дальше?». Ответ пришлось искать в коде, а факт надолго — одна строка в KNOWLEDGE.md «вопрос → ответ (где в коде)», чтобы в следующий раз он был в документах. Для ответа нужна работа или неясно, ответ нужен или работа, — одной строкой «сделать: <что>?» и закончить ход; его «да» откроет.'
@@ -1698,7 +1698,7 @@ function Invoke-TurnStart($data) {
     $isStatus = Test-StatusQuestion $promptRaw
     $isAnswer = (-not $isStatus) -and (Test-Question $promptRaw)
     $isOk = ($promptRaw.Trim().Length -le 24) -and [regex]::IsMatch($promptRaw.Trim(), $script:OkRe, 'IgnoreCase')
-    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; mixed = (Test-Mixed $promptRaw); looks = 0; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); boot = (Get-BootOnce $data); check = [regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
+    $snap = @{ ts = $ts; head = $null; status = @{}; ready_q = $isStatus; answer = $isAnswer; mixed = (Test-Mixed $promptRaw); place = ([regex]::IsMatch($promptRaw, $script:PlaceRe, 'IgnoreCase') -and -not $promptRaw.TrimStart().StartsWith('<')); looks = 0; ok = $isOk; exact = $isExact; complaint = [regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase'); boot = (Get-BootOnce $data); check = [regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase'); prompt = (Get-Cut (Hide-Secrets $prompt0) 140) }
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -ne $head) {
         $snap.head = $head.Trim()
@@ -1718,6 +1718,8 @@ function Invoke-TurnStart($data) {
     elseif ($snap.mixed) { Write-Out $script:MixedHint }
     elseif ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
     if ($isExact) { Write-Out $script:ExactHint }
+    if ($snap.place -and -not $isAnswer) { Write-Out $script:PlaceHint }
+    if ([regex]::IsMatch($promptRaw, $script:RootRe, 'IgnoreCase') -and -not $promptRaw.TrimStart().StartsWith('<')) { Write-Out $script:RootHint }
     if ([regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase') -and -not (Test-KitFull)) { Write-Out $script:CheckHint }
     if ([regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase')) { Write-Out $script:ComplaintHint }
     $dh = Get-DocsHeavyHint $root; if ($dh) { Write-Out $dh }
@@ -1876,11 +1878,11 @@ function Invoke-CheckDocs($data) {
     $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
     if (Test-FastTurn $snap) {
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) }
+        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) + @(Get-PlaceMsgs $data $snap $since) }
         if ($fm.Count -gt 0) { Out-StopBlock $data $snap @('Перед завершением: ' + ($fm -join ' ')) $again }
         return
     }
-    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
+    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-PlaceMsgs $data $snap $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
     $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {
@@ -2214,6 +2216,40 @@ function Get-WhyHint([string]$root, [string]$prompt) {
     if ($lines.Count -gt 0) { $out += "`n" + 'Похожие просьбы владельца из журнала (проверить, что это то самое):' + (($lines | ForEach-Object { "`n- " + $_ }) -join '') }
     return $out
 }
+$script:PlaceRe = '(^|[\s,.])(над|под|ниже|выше|на\s+уровн\w*|рядом|справа|слева|правее|левее|внутри|в\s+пределах|границ\w*|передвин\w*|перемест\w*|подвин\w*|сдвин\w*|поставь|постав\w+\s+(над|под|рядом))(\s|[,.!?…]|$)'
+$script:PlaceHint = 'Набор: просьба «куда поставить». Первой строкой ответа — «Положение: <что> — <над / под / на уровне / внутри> <чего>, ширина N% от <родителя>»; слова допускают два места — один вопрос до правки. После правки — в браузере window.KIT_PLACE=[[что, отношение, чего], …] и `.claude/skills/layout-check/place-check.js`, в ответе строка «Положение: … ✓» с числами. Размеры — в % от родителя, не px.'
+$script:PlaceMsg = 'Просьба была «куда поставить», вёрстка правилась, а строки «Положение: … ✓/✗» с числами замера нет. Задай window.KIT_PLACE (что, отношение, относительно чего), выполни `.claude/skills/layout-check/place-check.js` в странице и допиши строку; ✗ — исправить, а не сдавать.'
+$script:RootRe = 'тормоз|медленн|еле\s+(груз|работ|откр)|долго\s+(груз|откр|думает|работ)|не\s+(груз|открыва|работает)|завис|подвиса|падает|упал[аои]?\b|вылета|ошибк(а|и|у|ой)?([\s,.!?]|$)|проблем\w*\s+с\s'
+$script:RootHint = 'Набор: проблема — идти прямо к корню. 1) Вопрос одной строкой: что именно не так и где. 2) Штатный инструмент диагностики этой системы первым (отладчик, профилировщик, журнал производителя, сетевая вкладка браузера), а не логи вокруг. 3) Узел, где теряется время или ломается; ждут там или считают; ждут — кого, имя и адрес. 4) Проверка — отключить подозреваемое целиком и замерить. Источник, который не может содержать ответ, не читать; находка, не отвечающая на вопрос, — заметка, не доклад; «совпало по времени» — не «вызвано».'
+$script:LoadMax = 40000
+function Get-PlaceMsgs($data, $snap, [double]$since) {
+    if (-not $snap -or (Get-Prop $snap 'place') -ne $true) { return @() }
+    $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) $since
+    $ui = $false
+    foreach ($u in @($tt.uses)) {
+        if ($null -eq $u) { continue }
+        if (($u.Name -in @('Write', 'Edit', 'MultiEdit')) -and [regex]::IsMatch([string](Get-Prop $u.Input 'file_path'), '\.(tsx|jsx|vue|svelte|css|scss|less|html?)$', 'IgnoreCase')) { $ui = $true; break }
+    }
+    if (-not $ui) { return @() }
+    $ans = [string](Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since)
+    if ((-not $ans) -or [regex]::IsMatch($ans, 'положение\s*:[^\n]*[✓✗]', 'IgnoreCase')) { return @() }
+    return @($script:PlaceMsg)
+}
+function Get-LoadWeight([string]$root) {
+    $files = @('STATE.md', 'LESSONS.md', 'INDEX.md', 'PROFILE.md') | ForEach-Object { Join-Path (Join-Path (Join-Path $root 'docs') 'ai') $_ }
+    $rd = Join-Path (Join-Path $root '.claude') 'rules'
+    if ([System.IO.Directory]::Exists($rd)) {
+        foreach ($f in @([System.IO.Directory]::GetFiles($rd, '*.md') | Sort-Object)) {
+            $head = ''; try { $t = [System.IO.File]::ReadAllText($f, $script:Utf8); $head = $t.Substring(0, [Math]::Min(400, $t.Length)) } catch {}
+            if (-not [regex]::IsMatch($head, '(?m)^paths\s*:')) { $files += $f }
+        }
+    }
+    $sizes = @(); foreach ($f in $files) { if ([System.IO.File]::Exists($f)) { $sizes += [pscustomobject]@{ n = [System.IO.Path]::GetFileName($f); b = (New-Object System.IO.FileInfo $f).Length } } }
+    $total = 0; foreach ($x in $sizes) { $total += $x.b }
+    if ($total -le $script:LoadMax) { return '' }
+    $top = (@($sizes | Sort-Object @{ Expression = 'b'; Descending = $true }, @{ Expression = 'n'; Descending = $true } | Select-Object -First 3) | ForEach-Object { $_.n + ' ' + [Math]::Round($_.b / 1000) + ' КБ' }) -join ', '
+    return ('Документы, которые грузятся в каждый сеанс: ' + [Math]::Round($total / 1000) + ' КБ (предел ' + ($script:LoadMax / 1000) + '): ' + $top + '. Это оплачивается в каждом запросе — предложить владельцу сжать по `kit-compact`: правила без стенограммы, в STATE только текущее, история — в docs/ai/archive/.')
+}
 function Get-BootOnce($data) {
     # Отметка «сеанс начался с clear / compact / startup» читается один раз — первым ходом после события.
     try {
@@ -2284,6 +2320,7 @@ function Invoke-SessionStart($data) {
     if ($note) { $lines += $note }
     $note = Get-InterfaceNotice $root
     if ($note) { $lines += $note }
+    $lw = Get-LoadWeight $root; if ($lw) { $lines += $lw }
     $lines += 'Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.'
     Write-Out ($lines -join "`n")
 }

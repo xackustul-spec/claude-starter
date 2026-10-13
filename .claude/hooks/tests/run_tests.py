@@ -661,6 +661,25 @@ def scenarios(impl, ps, tmp):
     S('быстро: начало хода 1а', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx', env=FAST)
     turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена. Где смотреть: пока нигде — правка только в файлах, скажите «выложи».')])
     S('быстро: экран правили, проверяющего и замера нет — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
+    # «куда поставить»: подсказка в начале, строка «Положение: … ✓» с замером в конце
+    S('место: «блок над записью» — подсказка', 'turn-start', dict(d10t, prompt='поставь блок поиска над записью на тренировки'), r, 'ctx', 'Положение:', env=FAST)
+    turn_with([tu('Edit', {'file_path': r + '/app/reception.html', 'old_string': 'a', 'new_string': 'b'}), tx('Блок перенесён. Где смотреть: /reception — уже там.')])
+    S('место: вёрстку правили, строки «Положение» нет — вернуть', 'check-docs', d10t, r, 'block', 'place-check.js', env=FAST)
+    S('место: начало хода 2', 'turn-start', dict(d10t, prompt='поставь блок поиска над записью на тренировки'), r, 'ctx', env=FAST)
+    turn_with([tu('Edit', {'file_path': r + '/app/reception.html', 'old_string': 'a', 'new_string': 'b'}),
+               tx('Положение: #search выше #booking: низ 212 ≤ верх 220 ✓. Где смотреть: /reception — уже там.')])
+    S('место: строка с замером есть — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
+    S('место: «подпись клиента» — не про место', 'turn-start', dict(d10t, prompt='сохрани подпись клиента в договор'), r, 'ctx', env=FAST)
+    if 'Положение:' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
+    S('корень: «еле грузятся» — подсказка «прямо к корню»', 'turn-start', dict(d10t, prompt='фото и данные еле грузятся'), r, 'ctx', 'прямо к корню', env=FAST)
+    S('вопрос: «если нажать выйти — ошибка» — не вопрос', 'turn-start', dict(d10t, prompt='если нажать выйти — ошибка'), r, 'ctx', env=FAST)
+    if 'это вопрос' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'режим ответа', 'задание', out[-1][4], '')
+    write(r, 'docs/ai/STATE.md', '## Сейчас\n' + 'длинная история дня. ' * 2500)
+    S('вес: документы старта больше 40 КБ — сказать', 'session-start', dict(d10t, source='clear'), r, 'ctx', 'kit-compact', env=FAST)
+    os.remove(os.path.join(r, 'docs/ai/STATE.md'))
+    S('место: обычный ход после проверок', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx', env=FAST)
     S('быстро: ширина в css — без памятки', 'check-python',
       dict(d10t, tool_name='Edit', tool_input={'file_path': r + '/app/static/app.css', 'old_string': '.mtab{}', 'new_string': '.mtab{ min-width: 62px }'}), r, 'allow', env=FAST)
     S('быстро: запрещённое в css — всё равно названо', 'check-python',
