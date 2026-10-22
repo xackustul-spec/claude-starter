@@ -112,6 +112,25 @@ def trust_full():
     return os.environ.get('CLAUDE_TRUST_LEVEL', '').strip().lower() == 'full'
 
 
+def kit_source(root):
+    # Исходник набора — INSTALL.md и VERSION в клоне claude-starter (git с этим именем) или в папке с этим именем.
+    # Архив набора, распакованный прямо в папку проекта, — не исходник: это проект с недоустановленным набором.
+    # Повод: CRM 22.10 — набор распакован в C:\Zebra-Kolanchovka\CRM, и хук называл проект исходником набора.
+    if not (os.path.isfile(os.path.join(root, 'INSTALL.md')) and os.path.isfile(os.path.join(root, 'VERSION'))):
+        return False
+    if 'claude-starter' in os.path.basename(os.path.abspath(root)).lower():
+        return True
+    try:
+        return 'claude-starter' in open(os.path.join(root, '.git', 'config'), encoding='utf-8', errors='replace').read()
+    except Exception:
+        return False
+
+
+KIT_UNPACKED_MSG = ('Набор распакован прямо в папку проекта (в корне INSTALL.md и VERSION набора) — установка не закончена: '
+                    'сказать владельцу набрать /kit-setup (уберёт INSTALL.md и README набора, поставит .gitignore проекта, '
+                    'git, профиль). Это проект, а не исходник набора: работать здесь можно.')
+
+
 def project_dir(data):
     d = os.environ.get('CLAUDE_PROJECT_DIR') or data.get('cwd') or os.getcwd()
     return os.path.abspath(d)
@@ -681,7 +700,7 @@ def guard_instructions(data):
     root = project_dir(data)
     if update_mode(root) and kit_file_untouched(root, path):
         return  # обновление набора: свой же файл, владелец его не менял — молча
-    if CORE_RE.search(path) and os.path.isfile(manifest_path(root)) and not os.path.isfile(os.path.join(root, 'INSTALL.md')):
+    if CORE_RE.search(path) and os.path.isfile(manifest_path(root)) and not kit_source(root):
         deny('CLAUDE.md в проекте — ядро набора, его целиком заменяет обновление; правки в нём пропадут. '
              'Правило этого проекта — в .claude/rules/project.md (грузится всегда, набор его не трогает): '
              'строка с датой и словами владельца. Правило для части файлов — отдельный файл .claude/rules/ с paths.')
@@ -2643,9 +2662,11 @@ def session_start(data):
         json.dump({'src': src or 'startup'}, open(state_file(data, 'boot'), 'w', encoding='utf-8'))
     except Exception:
         pass
-    if os.path.isfile(os.path.join(root, 'INSTALL.md')) and os.path.isfile(os.path.join(root, 'VERSION')):
+    if kit_source(root):
         lines.append(f'Это исходник набора claude-starter (версия {read_version(root)}), не проект: не устанавливать '
                      'и не заполнять docs/ai. Работа здесь — /kit-harvest (уроки из проектов), выпуск версий.')
+    elif os.path.isfile(os.path.join(root, 'INSTALL.md')) and os.path.isfile(os.path.join(root, 'VERSION')):
+        lines.append(KIT_UNPACKED_MSG)
     head = git(root, 'rev-parse', '--short', 'HEAD')
     inside = (git(root, 'rev-parse', '--is-inside-work-tree') or '').strip() == 'true'
     if head is not None:

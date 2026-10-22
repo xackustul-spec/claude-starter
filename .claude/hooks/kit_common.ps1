@@ -54,6 +54,14 @@ function Get-Prop($obj, $name) {
     if ($null -eq $p) { return $null }
     return $p.Value
 }
+function Test-KitSource([string]$root) {
+    # Исходник набора — INSTALL.md и VERSION в клоне claude-starter (git с этим именем) или в папке с этим именем.
+    if (-not ([System.IO.File]::Exists((Join-Path $root 'INSTALL.md')) -and [System.IO.File]::Exists((Join-Path $root 'VERSION')))) { return $false }
+    if ([System.IO.Path]::GetFileName($root.TrimEnd('\', '/')).ToLowerInvariant().Contains('claude-starter')) { return $true }
+    try { $cf = Join-Path (Join-Path $root '.git') 'config'; if ([System.IO.File]::Exists($cf)) { return ([System.IO.File]::ReadAllText($cf)).Contains('claude-starter') } } catch {}
+    return $false
+}
+$script:KitUnpackedMsg = 'Набор распакован прямо в папку проекта (в корне INSTALL.md и VERSION набора) — установка не закончена: сказать владельцу набрать /kit-setup (уберёт INSTALL.md и README набора, поставит .gitignore проекта, git, профиль). Это проект, а не исходник набора: работать здесь можно.'
 function Out-Ask([string]$reason) {
     if (Test-TurnOk) { return }
     $o = @{ hookSpecificOutput = @{ hookEventName = 'PreToolUse'; permissionDecision = 'deny'; permissionDecisionReason = ($reason + $script:ChatAskSuffix) } }
@@ -554,7 +562,7 @@ function Invoke-GuardInstructions($data) {
     if ([string]::IsNullOrWhiteSpace($path) -or ($path -notmatch $script:InstrRe)) { return }
     $root = Get-ProjectDir $data
     if ((Test-UpdateMode $root) -and (Test-KitFileUntouched $root $path)) { return }
-    if (($path -match '(^|/)CLAUDE\.md$') -and [System.IO.File]::Exists((Join-Path (Join-Path $root '.claude') 'starter.json')) -and -not [System.IO.File]::Exists((Join-Path $root 'INSTALL.md'))) {
+    if (($path -match '(^|/)CLAUDE\.md$') -and [System.IO.File]::Exists((Join-Path (Join-Path $root '.claude') 'starter.json')) -and -not (Test-KitSource $root)) {
         Out-Deny 'CLAUDE.md в проекте — ядро набора, его целиком заменяет обновление; правки в нём пропадут. Правило этого проекта — в .claude/rules/project.md (грузится всегда, набор его не трогает): строка с датой и словами владельца. Правило для части файлов — отдельный файл .claude/rules/ с paths.'
     }
     if ($path -match $script:LocalSettingsRe) {
@@ -2268,8 +2276,10 @@ function Invoke-SessionStart($data) {
     Clear-OldState $data
     [void](Set-SessionClaim $data $root)
     try { $bs = $src; if (-not $bs) { $bs = 'startup' }; (@{ src = $bs } | ConvertTo-Json -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'boot') -Encoding UTF8 } catch {}
-    if ([System.IO.File]::Exists((Join-Path $root 'INSTALL.md')) -and [System.IO.File]::Exists((Join-Path $root 'VERSION'))) {
+    if (Test-KitSource $root) {
         $lines += ('Это исходник набора claude-starter (версия ' + (Read-KitVersion $root) + '), не проект: не устанавливать и не заполнять docs/ai. Работа здесь — /kit-harvest (уроки из проектов), выпуск версий.')
+    } elseif ([System.IO.File]::Exists((Join-Path $root 'INSTALL.md')) -and [System.IO.File]::Exists((Join-Path $root 'VERSION'))) {
+        $lines += $script:KitUnpackedMsg
     }
     $head = Invoke-Git $root @('rev-parse', '--short', 'HEAD')
     $inside = ([string](Invoke-Git $root @('rev-parse', '--is-inside-work-tree'))).Trim() -eq 'true'

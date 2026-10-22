@@ -787,7 +787,12 @@ def scenarios(impl, ps, tmp):
     S('версия: вышла новая — уведомление', 'session-start', {'source': 'startup'}, r, 'ctx', 'новая версия набора: 99.0.0',
       env={'KIT_NO_UPDATE_CHECK': ''})
 
-    S('исходник набора распознаётся', 'session-start', {'source': 'startup'}, newkit, 'ctx', 'исходник набора')
+    srckit = os.path.join(tmp, f'{impl}-claude-starter')
+    shutil.copytree(newkit, srckit, ignore=skip)
+    S('исходник набора распознаётся', 'session-start', {'source': 'startup'}, srckit, 'ctx', 'исходник набора')
+    S('набор распакован в папку проекта — не исходник, а /kit-setup', 'session-start', {'source': 'startup'}, newkit, 'ctx', 'распакован прямо в папку проекта')
+    if 'Это исходник набора' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'исходник', 'проект', out[-1][4], '')
 
     # папка без VERSION не затирает записанную версию (последним: переписывает манифест)
     noverkit = os.path.join(tmp, f'{impl}-noverkit')
