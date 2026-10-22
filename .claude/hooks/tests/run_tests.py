@@ -843,6 +843,12 @@ def scenarios(impl, ps, tmp):
     S('pre-write: CLAUDE.md при полном доверии — всё равно отказ (ядро наборное)', 'pre-write',
       {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/CLAUDE.md', 'old_string': 'a', 'new_string': 'b'}}, r, 'deny', 'rules/project.md',
       env={'CLAUDE_TRUST_LEVEL': 'full'})
+    write(r, '.claude/starter.lock', '{"date": "now"}')
+    S('pre-write: идёт установка (starter.lock) — охрана ядра молчит, остаётся обычный вопрос', 'pre-write',
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/CLAUDE.md', 'content': '# ядро'}}, r, 'ask')
+    if 'rules/project.md' in out[-1][4]:
+        out[-1] = (out[-1][0], False, 'отказ', 'можно', out[-1][4], '')
+    os.remove(os.path.join(r, '.claude/starter.lock'))
     S('стиль: ширина в css — памятка', 'check-python',
       {'tool_name': 'Edit', 'tool_input': {'file_path': r + '/app/static/app.css', 'old_string': '.mtab{}', 'new_string': '.mtab{ width: 62px; color: red }'}}, r, 'block', 'размер/положение: width')
     S('стиль: отрицательный margin и подпись в процентах — запрет назван', 'check-python',

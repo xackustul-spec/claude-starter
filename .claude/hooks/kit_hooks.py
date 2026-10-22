@@ -668,6 +668,17 @@ def local_settings_ok(text, root):
     return True
 
 
+def setup_lock(root):
+    # Идёт установка набора (kit-setup создал .claude/starter.lock, не старше часа): ядро CLAUDE.md пишется
+    # самим набором, охрана ядра молчит. Повод: CRM_COD 22.10 — охрана не давала поставить ядро вместо CLAUDE.md
+    # владельца, установка встала с вопросами.
+    p = os.path.join(root, '.claude', 'starter.lock')
+    try:
+        return time.time() - os.path.getmtime(p) <= 3600
+    except Exception:
+        return False
+
+
 def update_mode(root):
     # Метка обновления набора: .claude/starter.lock со словом update, не старше часа.
     p = os.path.join(root, '.claude', 'starter.lock')
@@ -700,7 +711,7 @@ def guard_instructions(data):
     root = project_dir(data)
     if update_mode(root) and kit_file_untouched(root, path):
         return  # обновление набора: свой же файл, владелец его не менял — молча
-    if CORE_RE.search(path) and os.path.isfile(manifest_path(root)) and not kit_source(root):
+    if CORE_RE.search(path) and os.path.isfile(manifest_path(root)) and not kit_source(root) and not setup_lock(root):
         deny('CLAUDE.md в проекте — ядро набора, его целиком заменяет обновление; правки в нём пропадут. '
              'Правило этого проекта — в .claude/rules/project.md (грузится всегда, набор его не трогает): '
              'строка с датой и словами владельца. Правило для части файлов — отдельный файл .claude/rules/ с paths.')

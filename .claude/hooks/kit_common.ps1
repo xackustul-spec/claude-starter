@@ -54,6 +54,12 @@ function Get-Prop($obj, $name) {
     if ($null -eq $p) { return $null }
     return $p.Value
 }
+function Test-SetupLock([string]$root) {
+    # Идёт установка набора (.claude/starter.lock не старше часа): охрана ядра молчит.
+    $p = Join-Path (Join-Path $root '.claude') 'starter.lock'
+    try { if ([System.IO.File]::Exists($p)) { return (((Get-Date) - (Get-Item -LiteralPath $p).LastWriteTime).TotalSeconds -le 3600) } } catch {}
+    return $false
+}
 function Test-KitSource([string]$root) {
     # Исходник набора — INSTALL.md и VERSION в клоне claude-starter (git с этим именем) или в папке с этим именем.
     if (-not ([System.IO.File]::Exists((Join-Path $root 'INSTALL.md')) -and [System.IO.File]::Exists((Join-Path $root 'VERSION')))) { return $false }
@@ -562,7 +568,7 @@ function Invoke-GuardInstructions($data) {
     if ([string]::IsNullOrWhiteSpace($path) -or ($path -notmatch $script:InstrRe)) { return }
     $root = Get-ProjectDir $data
     if ((Test-UpdateMode $root) -and (Test-KitFileUntouched $root $path)) { return }
-    if (($path -match '(^|/)CLAUDE\.md$') -and [System.IO.File]::Exists((Join-Path (Join-Path $root '.claude') 'starter.json')) -and -not (Test-KitSource $root)) {
+    if (($path -match '(^|/)CLAUDE\.md$') -and [System.IO.File]::Exists((Join-Path (Join-Path $root '.claude') 'starter.json')) -and -not (Test-KitSource $root) -and -not (Test-SetupLock $root)) {
         Out-Deny 'CLAUDE.md в проекте — ядро набора, его целиком заменяет обновление; правки в нём пропадут. Правило этого проекта — в .claude/rules/project.md (грузится всегда, набор его не трогает): строка с датой и словами владельца. Правило для части файлов — отдельный файл .claude/rules/ с paths.'
     }
     if ($path -match $script:LocalSettingsRe) {
