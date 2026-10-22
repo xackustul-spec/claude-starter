@@ -1405,7 +1405,7 @@ function Get-WaitingNotice([string]$root) {
 # ------------------------------------------- главная задача: последняя строка ответа, вопрос не останавливает
 $script:MainTaskTail = 'Параллельно выполняю главную задачу'
 $script:MainTaskWait = 'Жду вашего решения по главной задаче'
-$script:MainTaskEmptyRe = '^(—|-|–|нет|пусто|TODO.*|\(.*\))?$'
+$script:MainTaskEmptyRe = '^((—|-|–|нет|пусто)?\s*(\(.*\))?|TODO.*)$'
 function Get-MainTask([string]$root) {
     # «Главная задача:» в «Сейчас» STATE.md — ТЗ владельца; живёт там, пока он не сказал «готово».
     $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
