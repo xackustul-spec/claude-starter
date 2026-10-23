@@ -923,6 +923,7 @@ def scenarios(impl, ps, tmp):
     S('«да» владельца: вопрос вернулся', 'guard-shell', {'session_id': 'ok-' + impl, 'tool_input': {'command': 'pip install numpy'}, 'scratchpad_dir': os.path.join(tmp, 'state')}, r, 'ask')
     brief = 'Задача: сверить экран конкурентов с эталоном\nГде: http://localhost:3000/rivals и docs/ai/specs/ui/rivals.md\nВернуть: таблицу пункт — есть/нет и счёт\nСтоп: все пункты описи пройдены'
     S('субагент: задание по форме — вписан предел', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'ui-checker', 'prompt': brief}}, r, 'ctx', 'Не нашёл за 6 вызовов')
+    S('субагент: с ролью — предел специалиста', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'specialist', 'prompt': 'Роль: аудитор безопасности (OWASP)\n' + brief}}, r, 'ctx', 'Не больше 25 вызовов')
     S('субагент: предел уже есть — молчит', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': brief + '\n\nПредел: 15 вызовов'}}, r, 'allow')
     S('субагент: задание без формы — отказ с образцом', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'general-purpose', 'prompt': 'изучи, как устроена загрузка платежей, и расскажи'}}, r, 'deny', 'Задача: <одно действие')
     S('субагент: нет строки «Стоп» — отказ', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': 'Задача: найти, где пишется statement_id\nГде: work/app/services.py\nВернуть: путь и строку'}}, r, 'deny', 'Стоп:')
