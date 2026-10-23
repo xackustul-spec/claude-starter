@@ -906,7 +906,7 @@ def scenarios(impl, ps, tmp):
     S('своя папка: временный файл — молча', 'pre-write',
       {'tool_name': 'Write', 'tool_input': {'file_path': os.path.join(tempfile.gettempdir(), 'scratch.txt'), 'content': 'x'}}, r, 'allow')
     S('своя папка: файл внутри проекта — молча', 'pre-write',
-      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/app/ok.txt', 'content': 'x'}}, r, 'allow')
+      {'tool_name': 'Write', 'tool_input': {'file_path': r + '/notes/ok.txt', 'content': 'x'}}, r, 'allow')
     bom_input = b'\xef\xbb\xbf' + json.dumps({'session_id': 'bom', 'cwd': r, 'tool_input': {
         'file_path': r + '/a.py', 'content': 'имя = 1'}}, ensure_ascii=False).encode('utf-8')
     S('guard-cyrillic: JSON с BOM на входе', 'guard-cyrillic', bom_input, r, 'block')
