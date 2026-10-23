@@ -107,6 +107,15 @@ function Get-StateFile($data, [string]$kind) {
     $sid = [regex]::Replace($sid, '[^\w.-]', '_')
     return (Join-Path $base ("starter-" + $sid + "." + $kind + ".json"))
 }
+function Get-HintOnce($data, [string]$key, [string]$text) {
+    # Подсказка целиком — один раз за сеанс; повторно — строка-указатель. После /clear и compact список сбрасывается.
+    $sf = Get-StateFile $data 'hints'
+    $seen = @()
+    try { if (Test-Path -LiteralPath $sf) { $seen = @(Get-Content -LiteralPath $sf -Encoding UTF8) } } catch { $seen = @() }
+    if ($seen -contains $key) { return ('[claude-starter] Подсказка «' + $key + '» — как выше в этом сеансе (CLAUDE.md).' + "`n") }
+    try { Add-Content -LiteralPath $sf -Value $key -Encoding UTF8 } catch {}
+    return $text
+}
 function Get-RelPath([string]$path, [string]$root) {
     $p = $path -replace '\\', '/'
     $r = ($root -replace '\\', '/').TrimEnd('/')
@@ -797,6 +806,8 @@ function Invoke-RulesOnWrite($data) {
     $root = Get-ProjectDir $data
     $rel = Get-RelPath $path $root
     if (-not $rel -or $rel.StartsWith('.claude/') -or $rel.StartsWith('docs/')) { return }
+    $abs = $path; if (-not [System.IO.Path]::IsPathRooted($path)) { $abs = Join-Path $root $path }
+    if ([System.IO.File]::Exists($abs)) { return }
     $rulesDir = Join-Path (Join-Path $root '.claude') 'rules'
     if (-not (Test-Path -LiteralPath $rulesDir)) { return }
     $sf = Get-StateFile $data 'rules'
@@ -1483,7 +1494,7 @@ $script:ChangeCmdRe = '(^|[\s;&|("''])(scp|rsync|patch|tee|sed\s+-i|git\s+(commi
 $script:QuestionRe = '(\?\s*$|\?\s|^\W*(что|как|почему|зачем|где|когда|какой|какая|какие|сколько|можно ли|есть ли|это|а что|а как|а почему|правильно ли|верно ли|нужно ли|надо ли|скажи|объясни|расскажи|подскажи|тоесть|то есть)\b)'
 $script:WorkRe = '\b(сделай|сделать|добавь|добавить|исправь|исправить|убери|убрать|поправь|поправить|замени|заменить|проверь|проверить|запусти|выложи|перенеси|напиши|создай|удали|обнови|продолжай|доделай|делай|давай|разбей|подключи|настрой|почини|верни)\b'
 $script:AnswerLookMax = 5
-$script:AnswerHint = 'Набор: это вопрос, а не задание — ответ первой строкой, сразу. Откуда брать, по порядку: переписка → документы проекта (STATE, KNOWLEDGE, project.md, нужный файл по INDEX) → один поиск в коде (Grep). Обращений к файлам и командам — не больше ' + $script:AnswerLookMax + '; ни субагентов, ни правок кода, ни команд с записью (хук не пропустит). Не нашёл — так и сказать: «в <где смотрел> этого нет», и «поискать дальше?». Ответ пришлось искать в коде, а факт надолго — одна строка в KNOWLEDGE.md «вопрос → ответ (где в коде)», чтобы в следующий раз он был в документах. Для ответа нужна работа или неясно, ответ нужен или работа, — одной строкой «сделать: <что>?» и закончить ход; его «да» откроет.'
+$script:AnswerHint = 'Набор: это вопрос, а не задание — ответ первой строкой, сразу. Откуда брать, по порядку: переписка → документы проекта (STATE и PROFILE уже в контексте — не открывать; KNOWLEDGE, project.md, нужный файл по INDEX) → один поиск в коде (Grep). Обращений к файлам и командам — не больше ' + $script:AnswerLookMax + '; ни субагентов, ни правок кода, ни команд с записью (хук не пропустит). Не нашёл — так и сказать: «в <где смотрел> этого нет», и «поискать дальше?». Ответ пришлось искать в коде, а факт надолго — одна строка в KNOWLEDGE.md «вопрос → ответ (где в коде)», чтобы в следующий раз он был в документах. Для ответа нужна работа или неясно, ответ нужен или работа, — одной строкой «сделать: <что>?» и закончить ход; его «да» откроет.'
 $script:AnswerDeny = 'Ход начался с вопроса владельца — в нём только ответ словами. Нужна работа — спроси одной строкой «сделать: <что>?» и закончи ход; его «да» следующим сообщением откроет этот вызов.'
 $script:AnswerLookDeny = 'Вопрос владельца, а обращений уже {0} — хватит искать. Ответь сейчас тем, что нашёл; чего не нашёл — скажи, где смотрел, и спроси «поискать дальше?».'
 $script:AnswerAgentDeny = 'Ход — вопрос владельца: отвечай сам, из документов проекта и одного поиска в коде, без субагента. Ответ требует большой разведки — спроси «сделать: <что>?» и закончи ход.'
@@ -1508,6 +1519,8 @@ function Invoke-PreAnswer($data) {
     if ($tool -in @('Agent', 'Task')) { if ($isAns) { Out-Deny $script:AnswerAgentDeny }; return }
     if ($tool -in @('Bash', 'PowerShell')) { Invoke-GuardStatusShell ([string](Get-Prop (Get-Prop $data 'tool_input') 'command')) $data }
     if (-not $isAns -or -not [regex]::IsMatch($tool, $script:LookToolsRe)) { return }
+    $p0 = ([string](Get-Prop (Get-Prop $data 'tool_input') 'file_path')) -replace '\\', '/'
+    if ($tool -eq 'Read' -and ($script:AttachedDocs -contains ($p0 -replace '^.*/', '')) -and ('/' + $p0).Contains('/docs/ai/')) { return }
     $n = 1; try { $n = [int](Get-Prop $snap 'looks') + 1 } catch { $n = 1 }
     if ($n -gt $script:AnswerLookMax) { Out-Deny ($script:AnswerLookDeny -f ($n - 1)) }
     $snap | Add-Member -NotePropertyName looks -NotePropertyValue $n -Force
@@ -1729,17 +1742,17 @@ function Invoke-TurnStart($data) {
     if ($other) { Write-Out $other }
     if ($hasSecret) { Write-Out $script:SecretHint }
     if (-not $prompt.StartsWith('<')) { $ih = Get-IndexHint $root $prompt; if ($ih) { Write-Out $ih } }
-    if ($isStatus) { Write-Out $script:StatusHint }
+    if ($isStatus) { Write-Out (Get-HintOnce $data 'готовность' $script:StatusHint) }
     elseif ($isAnswer) { Write-Out $script:AnswerHint; $wh = Get-WhyHint $root $promptRaw; if ($wh) { Write-Out $wh } }
     elseif ($snap.mixed) { Write-Out $script:MixedHint }
-    elseif ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out $script:VagueHint }
-    if ($isExact) { Write-Out $script:ExactHint }
+    elseif ([regex]::IsMatch($prompt, $script:VagueRe, 'IgnoreCase')) { Write-Out (Get-HintOnce $data 'расплывчато' $script:VagueHint) }
+    if ($isExact) { Write-Out (Get-HintOnce $data 'дословно' $script:ExactHint) }
     if ($snap.place -and -not $isAnswer) { Write-Out $script:PlaceHint }
-    if ([regex]::IsMatch($promptRaw, $script:RootRe, 'IgnoreCase') -and -not $promptRaw.TrimStart().StartsWith('<')) { Write-Out $script:RootHint }
+    if ([regex]::IsMatch($promptRaw, $script:RootRe, 'IgnoreCase') -and -not $promptRaw.TrimStart().StartsWith('<')) { Write-Out (Get-HintOnce $data 'корень' $script:RootHint) }
     if ([regex]::IsMatch($promptRaw, $script:CheckRe, 'IgnoreCase') -and -not (Test-KitFull)) { Write-Out $script:CheckHint }
-    if ([regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase')) { Write-Out $script:ComplaintHint }
+    if ([regex]::IsMatch($promptRaw, $script:ComplaintRe, 'IgnoreCase')) { Write-Out (Get-HintOnce $data 'претензия' $script:ComplaintHint) }
     $dh = Get-DocsHeavyHint $root; if ($dh) { Write-Out $dh }
-    if ([regex]::IsMatch($promptRaw, $script:LiteralRe, 'IgnoreCase') -and -not $promptRaw.TrimStart().StartsWith('/')) { Write-Out $script:LiteralHint }
+    if ([regex]::IsMatch($promptRaw, $script:LiteralRe, 'IgnoreCase') -and -not $promptRaw.TrimStart().StartsWith('/')) { Write-Out (Get-HintOnce $data 'буквально' $script:LiteralHint) }
     $ctxHint = Get-ContextHint $root
     if ($ctxHint) { Write-Out $ctxHint }
     $hint = Get-ChoiceHint $prompt
@@ -1748,8 +1761,6 @@ function Invoke-TurnStart($data) {
     if ($mt) { Write-Out $mt }
     $sh = Get-SlowCallHint $data
     if ($sh) { Write-Out $sh }
-    if ($prompt.Length -lt 12) { return }
-    Write-Out 'Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог» (если владелец не задал форму ответа). Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.'
 }
 # Лимиты строк: подключённые всегда документы — жёстче, остальные — 300.
 $script:DocLimits = @{ 'PROFILE.md' = 40; 'STATE.md' = 60; 'KNOWLEDGE.md' = 80; 'LESSONS.md' = 40; 'INDEX.md' = 60; 'PROJECT_MAP.md' = 40 }
@@ -2283,6 +2294,7 @@ function Invoke-SessionStart($data) {
     $statePath = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
     Clear-OldState $data
     [void](Set-SessionClaim $data $root)
+    if ($src -eq 'compact' -or $src -eq 'clear') { try { Remove-Item -LiteralPath (Get-StateFile $data 'hints') -Force -ErrorAction SilentlyContinue } catch {} }
     try { $bs = $src; if (-not $bs) { $bs = 'startup' }; (@{ src = $bs } | ConvertTo-Json -Compress) | Set-Content -LiteralPath (Get-StateFile $data 'boot') -Encoding UTF8 } catch {}
     if (Test-KitSource $root) {
         $lines += ('Это исходник набора claude-starter (версия ' + (Read-KitVersion $root) + '), не проект: не устанавливать и не заполнять docs/ai. Работа здесь — /kit-harvest (уроки из проектов), выпуск версий.')
@@ -2311,11 +2323,6 @@ function Invoke-SessionStart($data) {
                 $lines += ('⚠ STATE.md записан на коммите ' + $rec.Substring(0, 7) + ', а сейчас ' + $head + ' — сначала сверить с git log.')
             }
         }
-        $body = @(($txt -split "`n") | ForEach-Object { $_.TrimEnd() } | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('<!--') })
-        $keep = @()
-        foreach ($ln in $body) { if ($ln.StartsWith('## ') -and $keep.Count -gt 0) { break }; $keep += $ln }
-        $keep = @($keep | Select-Object -First 8)
-        if ($keep.Count -gt 0) { $lines += ('STATE.md: ' + $keep[0]); foreach ($x in ($keep | Select-Object -Skip 1)) { $lines += ('  ' + $x) } }
         if ($txt.Length -gt 0 -and $txt.Substring(0, [Math]::Min(400, $txt.Length)).Contains('TODO')) { $lines += 'STATE.md ещё не заполнен — набор не инициализирован: предложить владельцу /kit-setup.' }
     } else {
         $lines += 'docs/ai/STATE.md нет — набор не инициализирован: предложить владельцу /kit-setup.'
@@ -2339,6 +2346,5 @@ function Invoke-SessionStart($data) {
     $note = Get-InterfaceNotice $root
     if ($note) { $lines += $note }
     $lw = Get-LoadWeight $root; if ($lw) { $lines += $lw }
-    $lines += 'Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.'
     Write-Out ($lines -join "`n")
 }

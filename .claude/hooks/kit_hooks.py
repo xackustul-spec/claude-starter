@@ -150,6 +150,24 @@ def state_file(data, kind):
     return os.path.join(state_dir(data), f'starter-{sid}.{kind}.json')
 
 
+def hint_once(data, key, text):
+    # Подсказка целиком — один раз за сеанс (текст остаётся в переписке); повторно — строка-указатель.
+    # После /clear и compact переписка новая — список сбрасывается в session_start.
+    sf = state_file(data, 'hints')
+    try:
+        seen = open(sf, encoding='utf-8').read().split()
+    except Exception:
+        seen = []
+    if key in seen:
+        return '[claude-starter] Подсказка «' + key + '» — как выше в этом сеансе (CLAUDE.md).\n'
+    try:
+        with open(sf, 'a', encoding='utf-8') as fh:
+            fh.write(key + '\n')
+    except Exception:
+        pass
+    return text
+
+
 def rel_path(path, root):
     p = path.replace('\\', '/')
     r = root.replace('\\', '/').rstrip('/')
@@ -994,6 +1012,8 @@ def rules_on_write(data):
     rel = rel_path(path, root)
     if not rel or rel.startswith(('.claude/', 'docs/')):
         return
+    if os.path.isfile(path if os.path.isabs(path) else os.path.join(root, path)):
+        return  # файл уже есть: правило по paths подгружено при его чтении, повторять не нужно
     rules_dir = os.path.join(root, '.claude', 'rules')
     if not os.path.isdir(rules_dir):
         return
@@ -1950,7 +1970,7 @@ WORK_RE = re.compile(r'\b(сделай|сделать|добавь|добави�
                      r'заменить|проверь|проверить|запусти|выложи|перенеси|напиши|создай|удали|обнови|продолжай|'
                      r'доделай|делай|давай|разбей|подключи|настрой|почини|верни)\b', re.I)
 ANSWER_HINT = ('Набор: это вопрос, а не задание — ответ первой строкой, сразу. Откуда брать, по порядку: переписка → '
-               'документы проекта (STATE, KNOWLEDGE, project.md, нужный файл по INDEX) → один поиск в коде (Grep). '
+               'документы проекта (STATE и PROFILE уже в контексте — не открывать; KNOWLEDGE, project.md, нужный файл по INDEX) → один поиск в коде (Grep). '
                'Обращений к файлам и командам — не больше %d; ни субагентов, ни правок кода, ни команд с записью (хук не '
                'пропустит). Не нашёл — так и сказать: «в <где смотрел> этого нет», и «поискать дальше?». Ответ пришлось '
                'искать в коде, а факт надолго — одна строка в KNOWLEDGE.md «вопрос → ответ (где в коде)», чтобы в '
@@ -2053,6 +2073,9 @@ def pre_answer(data):
         guard_status_shell(str(ti.get('command') or ''), data)
     if not snap.get('answer') or not LOOK_TOOLS_RE.match(tool):
         return
+    p0 = str(ti.get('file_path') or '').replace('\\', '/')
+    if tool == 'Read' and p0.rsplit('/', 1)[-1] in ATTACHED_DOCS and '/docs/ai/' in ('/' + p0):
+        return  # этот вызов отклонит attached_doc_note — в лимит обращений не засчитывать
     n = int(snap.get('looks') or 0) + 1
     if n > ANSWER_LOOK_MAX:
         deny(ANSWER_LOOK_DENY % (n - 1))
@@ -2304,7 +2327,7 @@ def turn_start(data):
         if ih:
             sys.stdout.write(ih)
     if snap['ready_q']:
-        sys.stdout.write(STATUS_HINT)
+        sys.stdout.write(hint_once(data, 'готовность', STATUS_HINT))
     elif snap['answer']:
         sys.stdout.write(ANSWER_HINT % ANSWER_LOOK_MAX)
         wh = why_hint(root, prompt_raw)
@@ -2313,22 +2336,22 @@ def turn_start(data):
     elif snap['mixed']:
         sys.stdout.write(MIXED_HINT)
     elif VAGUE_RE.search(prompt):
-        sys.stdout.write(VAGUE_HINT)
+        sys.stdout.write(hint_once(data, 'расплывчато', VAGUE_HINT))
     if snap['exact']:
-        sys.stdout.write(EXACT_HINT)
+        sys.stdout.write(hint_once(data, 'дословно', EXACT_HINT))
     if snap['place'] and not snap['answer']:
         sys.stdout.write(PLACE_HINT)
     if ROOT_RE.search(prompt_raw) and not prompt_raw.lstrip().startswith('<'):
-        sys.stdout.write(ROOT_HINT)
+        sys.stdout.write(hint_once(data, 'корень', ROOT_HINT))
     if snap['check'] and not kit_full():
         sys.stdout.write(CHECK_HINT)
     if snap['complaint']:
-        sys.stdout.write(COMPLAINT_HINT)
+        sys.stdout.write(hint_once(data, 'претензия', COMPLAINT_HINT))
     dh = docs_heavy_hint(root)
     if dh:
         sys.stdout.write(dh)
     if LITERAL_RE.search(prompt_raw) and not prompt_raw.lstrip().startswith('/'):
-        sys.stdout.write(LITERAL_HINT)
+        sys.stdout.write(hint_once(data, 'буквально', LITERAL_HINT))
     ctx = context_hint(root)
     if ctx:
         sys.stdout.write(ctx)
@@ -2341,10 +2364,7 @@ def turn_start(data):
     sh = slow_call_hint(data)
     if sh:
         sys.stdout.write(sh)
-    if len(prompt) < 12:
-        return
-    sys.stdout.write('Набор: сверь запрос с «Что запускать» в CLAUDE.md; первая строка ответа — «режим — итог» '
-                     '(если владелец не задал форму ответа). Изменил код — сам, молча, в том же шаге: шапка файла и docs/ai.\n')
+
 
 
 def stop_block(data, snap, lines, again=False):
@@ -2671,6 +2691,11 @@ def session_start(data):
     state_path = os.path.join(root, 'docs', 'ai', 'STATE.md')
     cleanup_state(data)
     claim_session(data, root)
+    if src in ('compact', 'clear'):  # переписка новая — подсказки снова показать целиком
+        try:
+            os.remove(state_file(data, 'hints'))
+        except Exception:
+            pass
     try:  # чем начался сеанс (startup / resume / clear / compact) — попадёт в хронометраж первого хода
         json.dump({'src': src or 'startup'}, open(state_file(data, 'boot'), 'w', encoding='utf-8'))
     except Exception:
@@ -2699,16 +2724,6 @@ def session_start(data):
         m = re.search(r'head:\s*([0-9a-f]{7,40})', txt, re.I)
         if m and head is not None and not state_head_ok(root, m.group(1).lower()):
             lines.append(f'⚠ STATE.md записан на коммите {m.group(1)[:7]}, а сейчас {head.strip()} — сначала сверить с git log.')
-        body = [ln.rstrip() for ln in txt.splitlines() if ln.strip() and not ln.strip().startswith('<!--')]
-        keep = []
-        for ln in body:
-            if ln.startswith('## ') and keep:
-                break
-            keep.append(ln)
-        keep = keep[:8]
-        if keep:
-            lines.append('STATE.md: ' + keep[0])
-            lines += ['  ' + x for x in keep[1:]]
         if 'TODO' in txt[:400]:
             lines.append('STATE.md ещё не заполнен — набор не инициализирован: предложить владельцу /kit-setup.')
     else:
@@ -2744,7 +2759,6 @@ def session_start(data):
     note = load_weight(root)
     if note:
         lines.append(note)
-    lines.append('Дальше: сверить запрос с «Что запускать» (CLAUDE.md); подробности состояния — в docs/ai/STATE.md.')
     sys.stdout.write('\n'.join(lines) + '\n')
 
 

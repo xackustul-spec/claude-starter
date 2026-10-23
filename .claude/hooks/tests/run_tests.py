@@ -250,7 +250,7 @@ def scenarios(impl, ps, tmp):
           '| specs/orphan/ | без нулевого | когда-нибудь |\n')
     write(r, 'ТЗ-ЧЕКЛИСТ.md', '# Чеклист\n| Часть | О чём | Когда сюда идти |\n|---|---|---|\n| 01-indexing.md | индексация | когда про индекс |\n')
     git(r, 'add', '-A'); git(r, 'commit', '-qm', 'family')
-    s11 = S('семейство: снимок', 'turn-start', {'prompt': 'добавь часть про скорость'}, r, 'ctx')
+    s11 = S('семейство: снимок', 'turn-start', {'prompt': 'добавь часть про скорость'}, r, 'allow')
     write(r, 'docs/ai/specs/checkup/02-speed.md', '# Скорость\n- проверка\n')
     S('семейство: новая часть не записана в нулевом — блок', 'check-docs', {'session_id': s11}, r, 'block', 'нулевом файле')
     write(r, 'ТЗ-ЧЕКЛИСТ.md', '# Чеклист\n| Часть | О чём | Когда сюда идти |\n|---|---|---|\n| 01-indexing.md | индексация | когда про индекс |\n| 02-speed.md | скорость | когда про скорость |\n')
@@ -269,7 +269,7 @@ def scenarios(impl, ps, tmp):
     git(r, 'init', '-q'); git(r, 'add', '-A'); git(r, 'commit', '-qm', 'init')
     write(r, 'notes/owner.py', 'x = 1\n')
     s = f'{impl}-turn-{os.getpid()}'
-    S('ход: начало', 'turn-start', turn(r, s), r, 'ctx', 'Набор:')
+    S('ход: начало', 'turn-start', turn(r, s), r, 'allow')
     def ask(text):
         return {'session_id': f'{impl}-hint-{sid[0]}-{os.getpid()}', 'cwd': r, 'prompt': text,
                 'scratchpad_dir': os.path.join(tmp, 'state')}
@@ -355,7 +355,7 @@ def scenarios(impl, ps, tmp):
     write(r, 'docs/ai/INDEX.md', '| Файл | Какие данные | Когда читать |\n| STATE.md | x | всегда |\n')
     git(r, 'init', '-q'); git(r, 'add', '-A'); git(r, 'commit', '-qm', 'init')
     s5 = f'{impl}-docs-{os.getpid()}'
-    S('документы: начало', 'turn-start', turn(r, s5), r, 'ctx')
+    S('документы: начало', 'turn-start', turn(r, s5), r, 'allow')
     write(r, 'docs/ai/API_YANDEX.md', '# API Яндекса\n- токен: в .env\n')
     S('документы: новый без строки в INDEX', 'check-docs', {'session_id': s5}, r, 'block', 'API_YANDEX.md')
     write(r, 'docs/ai/INDEX.md', '| Файл | Какие данные | Когда читать |\n| API_YANDEX.md | вход, лимиты | при работе с API |\n')
@@ -506,7 +506,7 @@ def scenarios(impl, ps, tmp):
     s8 = f'{impl}-slow-{os.getpid()}'
     trs = os.path.join(rs, 'transcript-slow.jsonl')
     sdata = {'session_id': s8, 'cwd': rs, 'transcript_path': trs, 'scratchpad_dir': os.path.join(tmp, 'state')}
-    S('медленный вызов: начало хода', 'turn-start', dict(sdata, prompt='собери таблицу совпадений счетов и платёжек'), rs, 'ctx')
+    S('медленный вызов: начало хода', 'turn-start', dict(sdata, prompt='собери таблицу совпадений счетов и платёжек'), rs, 'allow')
     sf8 = os.path.join(tmp, 'state', 'starter-%s.turn.json' % re.sub(r'[^\w.-]', '_', s8))
     try:
         sn = json.load(open(sf8, encoding='utf-8')); sn['ts'] = time.time() - 900
@@ -519,7 +519,7 @@ def scenarios(impl, ps, tmp):
             use(t1, 'sl1', 'Bash', {'command': 'node tablica_html.mjs'}, usage(1, 1, 0, 1, 0)), res(t1 + 760, 'sl1')]) + '\n')
     S('медленный вызов: конец хода', 'check-docs', sdata, rs, 'allow')
     S('медленный вызов: следующий ход предупреждает', 'turn-start', dict(sdata, prompt='дальше по плану, продолжай работу'), rs, 'ctx', 'ждал 12 мин')
-    S('медленный вызов: сказано один раз', 'turn-start', dict(sdata, prompt='дальше по плану, продолжай работу'), rs, 'ctx')
+    S('медленный вызов: сказано один раз', 'turn-start', dict(sdata, prompt='дальше по плану, продолжай работу'), rs, 'allow')
     if 'ждал' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'повтор подсказки', 'без подсказки', out[-1][4], '')
 
@@ -603,7 +603,7 @@ def scenarios(impl, ps, tmp):
     S('ответ: вопрос и задание — подсказка «сначала ответ»', 'turn-start',
       dict(d10q, prompt='а еще .. как мы будем делить права, если надо дать только один клуб? и поправь страницу, она всегда одна'), r, 'ctx', 'и вопрос, и задание')
     S('ответ: в ход-задание pre-answer молчит', 'pre-answer', dict(d10q, tool_name='Edit', tool_input={'file_path': r + '/src/x.py', 'old_string': 'a', 'new_string': 'b'}), r, 'allow')
-    S('ответ: «теперь делай столб время входа» — не вопрос и не смесь', 'turn-start', dict(d10q, prompt='теперь делай столб время входа'), r, 'ctx')
+    S('ответ: «теперь делай столб время входа» — не вопрос и не смесь', 'turn-start', dict(d10q, prompt='теперь делай столб время входа'), r, 'allow')
     if 'это вопрос' in out[-1][4] or 'и вопрос, и задание' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
     S('готовность: следующий ход — Write снова можно', 'pre-write',
@@ -637,28 +637,28 @@ def scenarios(impl, ps, tmp):
     turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0, 1920 — 0. Где смотреть: /rivals — уже там.')])
     S('интерфейс: проверяющий ходил, замер нулевой — молчит', 'check-docs', d10t, r, 'allow')
     if has_measure:
-        S('замер: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
+        S('замер: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow')
         turn_with(edit_ui() + [tx('Карта поправлена, отступы выровнены.')])
         S('замер: правили экран, строки замера нет — вернуть', 'check-docs', d10t, r, 'block', 'строки замера')
-        S('замер: начало хода 2', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
+        S('замер: начало хода 2', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow')
         turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 320 — 3, 768 — 0, 1280 — 0, 1920 — 0.')])
         S('замер: есть проблемы на 320 — вернуть', 'check-docs', d10t, r, 'block', '320 — 3')
-        S('замер: начало хода 2а', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
+        S('замер: начало хода 2а', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow')
         turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 1280 — 0.')])
         S('замер: одна ширина вместо четырёх — вернуть', 'check-docs', d10t, r, 'block', 'строки замера')
         S('замер: начало хода 3', 'turn-start', dict(d10t, prompt='объясни карту'), r, 'ctx')
         turn_with([tx('Карта строится из таблицы позиций.')])
         S('замер: интерфейс не правили — молчит', 'check-docs', d10t, r, 'allow')
-        S('замер: начало хода 4', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx')
+        S('замер: начало хода 4', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow')
     turn_with([tu('Bash', {'command': 'ssh host cat app/rivals-map.tsx'})])
     S('интерфейс: только чтение .tsx — молчит', 'check-docs', d10t, r, 'allow')
 
     # быстрый режим (по умолчанию у владельца): в конце ответа ничего не требуется, пока он не попросил проверку
     FAST = {'CLAUDE_KIT_MODE': ''}
-    S('быстро: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx', env=FAST)
+    S('быстро: начало хода', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow', env=FAST)
     turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена.')])
     S('быстро: код правили, строки «Где смотреть» нет — вернуть', 'check-docs', d10t, r, 'block', 'Где смотреть', env=FAST)
-    S('быстро: начало хода 1а', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx', env=FAST)
+    S('быстро: начало хода 1а', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow', env=FAST)
     turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена. Где смотреть: пока нигде — правка только в файлах, скажите «выложи».')])
     S('быстро: экран правили, проверяющего и замера нет — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
     # «куда поставить»: подсказка в начале, строка «Положение: … ✓» с замером в конце
@@ -669,7 +669,7 @@ def scenarios(impl, ps, tmp):
     turn_with([tu('Edit', {'file_path': r + '/app/reception.html', 'old_string': 'a', 'new_string': 'b'}),
                tx('Положение: #search выше #booking: низ 212 ≤ верх 220 ✓. Где смотреть: /reception — уже там.')])
     S('место: строка с замером есть — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
-    S('место: «подпись клиента» — не про место', 'turn-start', dict(d10t, prompt='сохрани подпись клиента в договор'), r, 'ctx', env=FAST)
+    S('место: «подпись клиента» — не про место', 'turn-start', dict(d10t, prompt='сохрани подпись клиента в договор'), r, 'allow', env=FAST)
     if 'Положение:' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'ложная подсказка', 'без подсказки', out[-1][4], '')
     S('корень: «еле грузятся» — подсказка «прямо к корню»', 'turn-start', dict(d10t, prompt='фото и данные еле грузятся'), r, 'ctx', 'прямо к корню', env=FAST)
@@ -679,7 +679,7 @@ def scenarios(impl, ps, tmp):
     write(r, 'docs/ai/STATE.md', '## Сейчас\n' + 'длинная история дня. ' * 2500)
     S('вес: документы старта больше 40 КБ — сказать', 'session-start', dict(d10t, source='clear'), r, 'ctx', 'kit-compact', env=FAST)
     os.remove(os.path.join(r, 'docs/ai/STATE.md'))
-    S('место: обычный ход после проверок', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'ctx', env=FAST)
+    S('место: обычный ход после проверок', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow', env=FAST)
     S('быстро: ширина в css — без памятки', 'check-python',
       dict(d10t, tool_name='Edit', tool_input={'file_path': r + '/app/static/app.css', 'old_string': '.mtab{}', 'new_string': '.mtab{ min-width: 62px }'}), r, 'allow', env=FAST)
     S('быстро: запрещённое в css — всё равно названо', 'check-python',
@@ -690,32 +690,32 @@ def scenarios(impl, ps, tmp):
 
     # «как в эталоне» — только со счётом сверки и парой снимков
     if os.path.isfile(os.path.join(r, '.claude', 'skills', 'clone-screen', 'SKILL.md')):
-        S('копия: начало хода', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        S('копия: начало хода', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'allow')
         turn_with([tx('Карточка клиента сверена на глаз с эталоном, кнопки крупнее.')])
         S('копия: «сверена с эталоном» без счёта и пары — вернуть', 'check-docs', d10t, r, 'block', 'Сверка: N из M')
-        S('копия: начало хода 2', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        S('копия: начало хода 2', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'allow')
         turn_with([tx('Карточка соответствует эталону. Сверка: 14 из 21, пара docs/ai/previews/card/pair.html')])
         S('копия: счёт неполный, а сказано «соответствует» — вернуть', 'check-docs', d10t, r, 'block', '14 из 21')
-        S('копия: начало хода 3', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        S('копия: начало хода 3', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'allow')
         turn_with([tx('Карточка соответствует эталону. Сверка: 21 из 21, пара docs/ai/previews/card/pair.html')])
         S('копия: полный счёт и пара — молчит', 'check-docs', d10t, r, 'allow')
-        S('копия: начало хода 3а', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        S('копия: начало хода 3а', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'allow')
         turn_with([tx('Стиль как в эталоне. Сверка стиля: 28 из 34, пара docs/ai/previews/style/pair.html')])
         S('копия: «Сверка стиля» неполная — вернуть', 'check-docs', d10t, r, 'block', '28 из 34')
-        S('копия: начало хода 3б', 'turn-start', dict(d10t, prompt='продолжай карточку'), r, 'ctx')
+        S('копия: начало хода 3б', 'turn-start', dict(d10t, prompt='продолжай карточку'), r, 'allow')
         turn_with([tx('Структура карточки клиента собрана на сервере, откройте контакт и посмотрите.')])
         S('копия: «собрана, откройте» без описи эталона — молчит', 'check-docs', d10t, r, 'allow')
         write(r, 'docs/ai/specs/ui/ETALON.md', '# Опись эталона\n| файл | экран |\n|---|---|\n| 01.jpg | профиль |\n')
-        S('копия: начало хода 3в', 'turn-start', dict(d10t, prompt='продолжай карточку'), r, 'ctx')
+        S('копия: начало хода 3в', 'turn-start', dict(d10t, prompt='продолжай карточку'), r, 'allow')
         turn_with([tx('Структура карточки клиента собрана на сервере, откройте контакт и посмотрите.')])
         S('копия: идёт копия, экран сдан без пары — вернуть', 'check-docs', d10t, r, 'block', 'пары снимков нет')
-        S('копия: начало хода 3г', 'turn-start', dict(d10t, prompt='продолжай карточку'), r, 'ctx')
+        S('копия: начало хода 3г', 'turn-start', dict(d10t, prompt='продолжай карточку'), r, 'allow')
         turn_with([tx('Карточка клиента собрана. Сверка: 30 из 34, пара docs/ai/previews/card/pair.html; нет пунктов 12, 19, 20, 31.')])
         S('копия: сдан с парой и честным счётом — молчит', 'check-docs', d10t, r, 'allow')
         S('копия: начало хода 3д', 'turn-start', dict(d10t, prompt='что дальше?'), r, 'ctx')
         turn_with([tx('Дальше опись дашборда: смотрю снимки 13506 и 14.')])
         S('копия: ответ без сдачи — молчит', 'check-docs', d10t, r, 'allow')
-        S('копия: начало хода 4', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'ctx')
+        S('копия: начало хода 4', 'turn-start', dict(d10t, prompt='сделай карточку клиента по снимку'), r, 'allow')
         turn_with([tx('Карточка пока не соответствует эталону: нет блока платежей.')])
         S('копия: «не соответствует» — молчит', 'check-docs', d10t, r, 'allow')
 
@@ -724,7 +724,7 @@ def scenarios(impl, ps, tmp):
     git(rb, 'init', '-q'); git(rb, 'add', '-A'); git(rb, 'commit', '-qm', 'init')
     sb = f'{impl}-big-{os.getpid()}'
     db = {'session_id': sb, 'cwd': rb, 'scratchpad_dir': os.path.join(tmp, 'state')}
-    S('большой файл: начало хода', 'turn-start', dict(db, prompt='поправь кнопку на счетах'), rb, 'ctx')
+    S('большой файл: начало хода', 'turn-start', dict(db, prompt='поправь кнопку на счетах'), rb, 'allow')
     write(rb, 'app/main.py', '# Назначение: всё\n' + 'x = 1\n' * 1200)
     write(rb, 'docs/ai/STATE.md', '## Сейчас (обновлено: 2026-01-03, head: 0000000)\n- Работает: да\n')
     S('большой файл: 1200 строк — предложить разделение', 'check-docs', db, rb, 'block', 'перерос предел')
@@ -813,7 +813,7 @@ def scenarios(impl, ps, tmp):
     write(r, 'api/scratch.py', 'x = 1\n'); write(r, 'web/notes.py', 'y = 1\n')
     sub = os.path.join(r, 'web')
     s3 = f'{impl}-sub-{os.getpid()}'
-    S('подпапка: начало', 'turn-start', dict(turn(sub, s3)), sub, 'ctx')
+    S('подпапка: начало', 'turn-start', dict(turn(sub, s3)), sub, 'allow')
     S('подпапка: ничего не менял — можно', 'check-docs', {'session_id': s3}, sub, 'allow')
 
     # rules-on-write и pre-write
@@ -924,6 +924,9 @@ def scenarios(impl, ps, tmp):
     brief = 'Задача: сверить экран конкурентов с эталоном\nГде: http://localhost:3000/rivals и docs/ai/specs/ui/rivals.md\nВернуть: таблицу пункт — есть/нет и счёт\nСтоп: все пункты описи пройдены'
     S('субагент: задание по форме — вписан предел', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'ui-checker', 'prompt': brief}}, r, 'ctx', 'Не нашёл за 6 вызовов')
     S('субагент: с ролью — предел специалиста', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'specialist', 'prompt': 'Роль: аудитор безопасности (OWASP)\n' + brief}}, r, 'ctx', 'Не больше 25 вызовов')
+    hd = {'session_id': 'hint-once', 'prompt': 'сделай кнопку точь-в-точь как на фото', 'cwd': r, 'scratchpad_dir': os.path.join(tmp, 'state')}
+    S('подсказка: первый раз — целиком', 'turn-start', hd, r, 'ctx', 'буквальное слово')
+    S('подсказка: второй раз в сеансе — указатель', 'turn-start', hd, r, 'ctx', 'как выше в этом сеансе')
     S('субагент: предел уже есть — молчит', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': brief + '\n\nПредел: 15 вызовов'}}, r, 'allow')
     S('субагент: задание без формы — отказ с образцом', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'general-purpose', 'prompt': 'изучи, как устроена загрузка платежей, и расскажи'}}, r, 'deny', 'Задача: <одно действие')
     S('субагент: нет строки «Стоп» — отказ', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': 'Задача: найти, где пишется statement_id\nГде: work/app/services.py\nВернуть: путь и строку'}}, r, 'deny', 'Стоп:')
@@ -985,31 +988,31 @@ def scenarios(impl, ps, tmp):
     r2 = new_project(tmp, f'{impl}-s10')
     git(r2, 'init', '-q'); git(r2, 'add', '-A'); git(r2, 'commit', '-qm', 'init')
     r, r_keep = r2, r
-    sa = S('сеанс: первый занимает папку — молчит', 'turn-start', ask('поправь опечатку в README'), r, 'ctx')
+    sa = S('сеанс: первый занимает папку — молчит', 'turn-start', ask('поправь опечатку в README'), r, 'allow')
     if 'ещё один сеанс' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'ложная тревога', 'без предупреждения', out[-1][4], '')
     d2 = dict(ask('а теперь я продолжаю ту же задачу')); d2['session_id'] = sa + '-second'
     S('сеанс: второй в той же папке — предупредить', 'turn-start', d2, r, 'ctx', 'ещё один сеанс')
-    S('сеанс: второй продолжает — уже молчит', 'turn-start', d2, r, 'ctx')
+    S('сеанс: второй продолжает — уже молчит', 'turn-start', d2, r, 'allow')
     if 'ещё один сеанс' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'повторная тревога', 'без предупреждения', out[-1][4], '')
     d3 = {'source': 'clear', 'session_id': sa + '-third'}
     S('сеанс: после /clear старт занимает папку', 'session-start', d3, r, 'ctx', 'Старт сеанса')
     d4 = dict(ask('продолжаем ту же задачу дальше')); d4['session_id'] = sa + '-third'
-    S('сеанс: тот же сеанс после /clear — молчит', 'turn-start', d4, r, 'ctx')
+    S('сеанс: тот же сеанс после /clear — молчит', 'turn-start', d4, r, 'allow')
     if 'ещё один сеанс' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'ложная тревога после /clear', 'без предупреждения', out[-1][4], '')
     # контекст: один раз при переходе порога, потом каждый пятый ход
     write(r, 'docs/ai/timing.csv', hdr + small + big)
     S('контекст: первый ход над порогом — подсказка владельцу', 'turn-start', d4, r, 'ctx', 'введите /clear')
     write(r, 'docs/ai/timing.csv', hdr + small + big + big)
-    S('контекст: второй ход подряд — молчит', 'turn-start', d4, r, 'ctx')
+    S('контекст: второй ход подряд — молчит', 'turn-start', d4, r, 'allow')
     if '/clear' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'обои', 'без подсказки', out[-1][4], '')
     write(r, 'docs/ai/timing.csv', hdr + small + big * 5)
     S('контекст: пятый ход подряд — напомнить', 'turn-start', d4, r, 'ctx', 'введите /clear')
     write(r, 'docs/ai/timing.csv', hdr + big * 3 + small)
-    S('контекст: упал ниже порога — молчит', 'turn-start', d4, r, 'ctx')
+    S('контекст: упал ниже порога — молчит', 'turn-start', d4, r, 'allow')
     if '/clear' in out[-1][4]:
         out[-1] = (out[-1][0], False, 'подсказка', 'без подсказки', out[-1][4], '')
     os.remove(os.path.join(r, 'docs/ai/timing.csv'))

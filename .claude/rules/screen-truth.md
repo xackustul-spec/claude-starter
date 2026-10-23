@@ -1,7 +1,7 @@
 ---
 paths:
-  - "**/*.{tsx,jsx,vue,svelte,html,htm,css,scss,py,php,ts,js}"
-  - "**/{templates,components,pages,views,app,src}/**"
+  - "**/*.{tsx,jsx,vue,svelte,html,htm,css,scss}"
+  - "**/{templates,components,pages,views,integrations,settings}/**"
 ---
 
 # Экран показывает правду о данных, а не догадку
