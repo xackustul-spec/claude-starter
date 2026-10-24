@@ -1690,7 +1690,7 @@ function Get-StuckLessons([string]$root, [int]$minReps) {
     }
     return @($stuck)
 }
-$script:CodeLinesLimit = 1000
+$script:CodeLinesLimit = 400
 function Get-BigCodeNotice($data, [string]$top, $touched) {
     # Тронутый файл кода длиннее CodeLinesLimit строк — раз за сеанс напомнить про разделение.
     $marker = Get-StateFile $data 'bigcode'
@@ -1900,6 +1900,41 @@ function Get-WhereMsgs($data, [double]$since) {
     if ((-not $ans) -or [regex]::IsMatch($ans, 'где\s+смотреть\s*:', 'IgnoreCase')) { return @() }
     return @($script:WhereMsg)
 }
+$script:WaitMsg = 'В STATE.md, «Ждёт владельца», есть открытые пункты, а последними строками ответа их нет. Допиши в самый конец ответа блок «Жду от вас:» — до трёх пунктов, по строке на каждый (что нужно от владельца: решение, «да», данные), остальное одной строкой «и ещё N в STATE.md». После блока ничего не писать.'
+$script:CodeFileRe = '\.(py|js|jsx|mjs|cjs|ts|tsx|vue|svelte|php|go|rs|java|kt|rb|cs|ps1|sh)$'
+$script:CodeCheckMsg = 'В этом ходе правился код ({0}), а проверки по своду не было. Запусти одной командой: powershell -NoProfile -ExecutionPolicy Bypass -File .claude\skills\code-check\check.ps1 <изменённые файлы>; исправь замечания по новому коду и допиши в ответ строку «Код-проверка: N замечаний → исправлено / не исправлено: что» (скилл code-check).'
+function Get-WaitMsgs($data, [string]$root, [double]$since) {
+    # Что ждёт ответа владельца — всегда последними словами ответа.
+    $p = Join-Path (Join-Path (Join-Path $root 'docs') 'ai') 'STATE.md'
+    if (-not [System.IO.File]::Exists($p)) { return @() }
+    $txt = ''
+    try { $txt = [System.IO.File]::ReadAllText($p, $script:Utf8).TrimStart([char]0xFEFF) } catch { return @() }
+    $item = '^\s*(\d+[а-я]?[.)]|[-*•])\s*\S'
+    $wait = @((Get-StateSection $txt 'Ждёт владельца') -split "`n" | Where-Object { [regex]::IsMatch($_, $item) -and -not [regex]::IsMatch($_, '[—-]\s*$') })
+    if ($wait.Count -eq 0) { return @() }
+    $ans = [string](Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since)
+    if (-not $ans) { return @() }
+    $tail = $ans
+    if ($tail.Length -gt 2500) { $tail = $tail.Substring($tail.Length - 2500) }
+    if ([regex]::IsMatch($tail, 'жду\s+от\s+вас\s*:', 'IgnoreCase')) { return @() }
+    return @($script:WaitMsg)
+}
+function Get-CodeCheckMsgs($data, [string]$root, [double]$since) {
+    # Код правился — свод проверен одной командой (скилл code-check).
+    if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path (Join-Path $root '.claude') 'skills') 'code-check') 'check.ps1'))) { return @() }
+    $tt = Get-TurnTools ([string](Get-Prop $data 'transcript_path')) $since
+    $files = @()
+    $ran = $false
+    foreach ($u in @($tt.uses)) {
+        if ($null -eq $u) { continue }
+        $path = ([string](Get-Prop $u.Input 'file_path')) -replace '\\', '/'
+        if (($u.Name -in @('Write', 'Edit', 'MultiEdit')) -and $path -and [regex]::IsMatch($path, $script:CodeFileRe, 'IgnoreCase') -and -not [regex]::IsMatch($path, '(^|/)(\.claude|docs|tests?|node_modules)/')) { $files += ($path -replace '^.*/', '') }
+        if (($u.Name -in @('Bash', 'PowerShell')) -and ([string](Get-Prop $u.Input 'command')).Contains('code-check')) { $ran = $true }
+    }
+    if ($files.Count -eq 0 -or $ran) { return @() }
+    $names = (@($files | Sort-Object -Unique) | Select-Object -First 4) -join ', '
+    return @($script:CodeCheckMsg -f $names)
+}
 function Invoke-CheckDocs($data) {
     $root = Get-ProjectDir $data
     Write-Timing $data $root
@@ -1910,11 +1945,11 @@ function Invoke-CheckDocs($data) {
     $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
     if (Test-FastTurn $snap) {
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) + @(Get-PlaceMsgs $data $snap $since) }
+        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) }
         if ($fm.Count -gt 0) { Out-StopBlock $data $snap @('Перед завершением: ' + ($fm -join ' ')) $again }
         return
     }
-    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-PlaceMsgs $data $snap $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
+    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
     $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {

@@ -632,7 +632,8 @@ def scenarios(impl, ps, tmp):
 
     def edit_ui():  # метки времени — свежие на каждый ход, иначе вызовы окажутся «до начала хода»
         return [tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}),
-                tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'})]
+                tu('Agent', {'subagent_type': 'ui-checker', 'prompt': 'сверить экран конкурентов с эталоном'}),
+                tu('Bash', {'command': 'python3 .claude/skills/code-check/check.py app/rivals-map.tsx'})]
     has_measure = os.path.isfile(os.path.join(r, '.claude', 'skills', 'layout-check', 'layout-check.js'))
     turn_with(edit_ui() + [tx('Карта поправлена. Замер вёрстки: 320 — 0, 768 — 0, 1280 — 0, 1920 — 0. Где смотреть: /rivals — уже там.')])
     S('интерфейс: проверяющий ходил, замер нулевой — молчит', 'check-docs', d10t, r, 'allow')
@@ -659,8 +660,21 @@ def scenarios(impl, ps, tmp):
     turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена.')])
     S('быстро: код правили, строки «Где смотреть» нет — вернуть', 'check-docs', d10t, r, 'block', 'Где смотреть', env=FAST)
     S('быстро: начало хода 1а', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow', env=FAST)
-    turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена. Где смотреть: пока нигде — правка только в файлах, скажите «выложи».')])
+    turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tu('Bash', {'command': 'python3 .claude/skills/code-check/check.py app/rivals-map.tsx'}), tx('Карта поправлена. Где смотреть: пока нигде — правка только в файлах, скажите «выложи».')])
     S('быстро: экран правили, проверяющего и замера нет — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
+    S('быстро: начало хода 1б', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow', env=FAST)
+    turn_with([tu('Edit', {'file_path': r + '/app/rivals-map.tsx', 'old_string': 'a', 'new_string': 'b'}), tx('Карта поправлена. Где смотреть: пока нигде — правка только в файлах.')])
+    S('быстро: код правили, код-проверки нет — вернуть', 'check-docs', d10t, r, 'block', 'code-check', env=FAST)
+    st_path = os.path.join(r, 'docs', 'ai', 'STATE.md')
+    st_old = open(st_path, encoding='utf-8').read()
+    write(r, 'docs/ai/STATE.md', st_old.rstrip('\n') + '\n\n## Ждёт владельца\n- Решение: выкладывать ли исправление подсчёта «истекает» на боевой\n')
+    S('быстро: начало хода 1в', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow', env=FAST)
+    turn_with([tx('Готово. Где смотреть: пока нигде — правка только в файлах.')])
+    S('быстро: ждёт владельца, а последних слов «Жду от вас» нет — вернуть', 'check-docs', d10t, r, 'block', 'Жду от вас', env=FAST)
+    S('быстро: начало хода 1г', 'turn-start', dict(d10t, prompt='поправь карту конкурентов'), r, 'allow', env=FAST)
+    turn_with([tx('Готово.\n\nЖду от вас: выкладывать ли исправление подсчёта «истекает» на боевой.')])
+    S('быстро: «Жду от вас» в конце ответа — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
+    write(r, 'docs/ai/STATE.md', st_old)
     # «куда поставить»: подсказка в начале, строка «Положение: … ✓» с замером в конце
     S('место: «блок над записью» — подсказка', 'turn-start', dict(d10t, prompt='поставь блок поиска над записью на тренировки'), r, 'ctx', 'Положение:', env=FAST)
     turn_with([tu('Edit', {'file_path': r + '/app/reception.html', 'old_string': 'a', 'new_string': 'b'}), tx('Блок перенесён. Где смотреть: /reception — уже там.')])

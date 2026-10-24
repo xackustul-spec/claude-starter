@@ -2240,7 +2240,7 @@ def stuck_lessons(root, min_reps):
     return stuck
 
 
-CODE_LINES_LIMIT = 1000
+CODE_LINES_LIMIT = 400
 
 
 def big_code_notice(data, top, touched):
@@ -2415,6 +2415,53 @@ def where_msgs(data, since):
     return [WHERE_MSG]
 
 
+WAIT_RE = re.compile(r'жду\s+от\s+вас\s*:', re.I)
+WAIT_MSG = ('В STATE.md, «Ждёт владельца», есть открытые пункты, а последними строками ответа их нет. Допиши в самый '
+            'конец ответа блок «Жду от вас:» — до трёх пунктов, по строке на каждый (что нужно от владельца: решение, '
+            '«да», данные), остальное одной строкой «и ещё N в STATE.md». После блока ничего не писать.')
+CODE_FILE_RE = re.compile(r'\.(py|js|jsx|mjs|cjs|ts|tsx|vue|svelte|php|go|rs|java|kt|rb|cs|ps1|sh)$', re.I)
+CODE_CHECK_MSG = ('В этом ходе правился код (%s), а проверки по своду не было. Запусти одной командой: %s <изменённые файлы>; '
+                  'исправь замечания по новому коду и допиши в ответ строку «Код-проверка: N замечаний → исправлено / не '
+                  'исправлено: что» (скилл code-check).')
+
+
+def wait_msgs(data, root, since):
+    # Что ждёт ответа владельца — всегда последними словами ответа (он не должен искать это в документах).
+    try:
+        txt = open(os.path.join(root, 'docs', 'ai', 'STATE.md'), encoding='utf-8-sig', errors='replace').read()
+    except Exception:
+        return []
+    wait = [l for l in state_section(txt, 'Ждёт владельца').splitlines()
+            if re.match(r'\s*(\d+[а-я]?[.)]|[-*•])\s*\S', l) and not re.search(r'[—-]\s*$', l)]
+    if not wait:
+        return []
+    ans = last_answer(str(data.get('transcript_path') or ''), since)
+    if not ans or WAIT_RE.search(ans[-2500:]):
+        return []
+    return [WAIT_MSG]
+
+
+def code_check_msgs(data, root, since):
+    # Код правился — свод проверен одной командой (скилл code-check), а не «на глаз».
+    if not os.path.isfile(os.path.join(root, '.claude', 'skills', 'code-check', 'check.py')):
+        return []
+    uses, _, _ = turn_tools(str(data.get('transcript_path') or ''), since)
+    files, ran = [], False
+    for name, inp, ts in uses.values():
+        inp = inp if isinstance(inp, dict) else {}
+        path = str(inp.get('file_path') or '').replace('\\', '/')
+        if name in ('Write', 'Edit', 'MultiEdit') and path and CODE_FILE_RE.search(path) \
+                and not re.search(r'(^|/)(\.claude|docs|tests?|node_modules)/', path):
+            files.append(path.rsplit('/', 1)[-1])
+        if name in ('Bash', 'PowerShell') and 'code-check' in str(inp.get('command') or ''):
+            ran = True
+    if not files or ran:
+        return []
+    cmd = (r'powershell -NoProfile -ExecutionPolicy Bypass -File .claude\skills\code-check\check.ps1' if os.name == 'nt'
+           else 'python3 .claude/skills/code-check/check.py')
+    return [CODE_CHECK_MSG % (', '.join(sorted(set(files))[:4]), cmd)]
+
+
 def check_docs(data):
     root = project_dir(data)
     write_timing(data, root)
@@ -2426,13 +2473,13 @@ def check_docs(data):
     again = data.get('stop_hook_active') is True
     if fast_turn(snap):
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since) + place_msgs(data, snap, since)
+        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since) + wait_msgs(data, root, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since)
         if msgs:
             stop_block(data, snap, ['Перед завершением: ' + ' '.join(msgs)], again)
         return
     # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
     task_msgs = (main_task_check(data, root, since) + ui_check_msgs(data, root, since)
-                 + ([] if again else where_msgs(data, since) + place_msgs(data, snap, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
+                 + ([] if again else where_msgs(data, since) + wait_msgs(data, root, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
                     + lessons_block_msgs(data, root)))
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
