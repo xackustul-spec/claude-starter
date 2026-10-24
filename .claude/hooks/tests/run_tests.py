@@ -927,6 +927,7 @@ def scenarios(impl, ps, tmp):
     hd = {'session_id': 'hint-once', 'prompt': 'сделай кнопку точь-в-точь как на фото', 'cwd': r, 'scratchpad_dir': os.path.join(tmp, 'state')}
     S('подсказка: первый раз — целиком', 'turn-start', hd, r, 'ctx', 'буквальное слово')
     S('подсказка: второй раз в сеансе — указатель', 'turn-start', hd, r, 'ctx', 'как выше в этом сеансе')
+    S('субагент: «Объём: до 40 вызовов» — предел 40', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'general-purpose', 'prompt': 'Объём: до 40 вызовов\n' + brief}}, r, 'ctx', 'не больше 40 вызовов')
     S('субагент: предел уже есть — молчит', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': brief + '\n\nПредел: 15 вызовов'}}, r, 'allow')
     S('субагент: задание без формы — отказ с образцом', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'subagent_type': 'general-purpose', 'prompt': 'изучи, как устроена загрузка платежей, и расскажи'}}, r, 'deny', 'Задача: <одно действие')
     S('субагент: нет строки «Стоп» — отказ', 'pre-agent', {'tool_name': 'Agent', 'tool_input': {'prompt': 'Задача: найти, где пишется statement_id\nГде: work/app/services.py\nВернуть: путь и строку'}}, r, 'deny', 'Стоп:')
