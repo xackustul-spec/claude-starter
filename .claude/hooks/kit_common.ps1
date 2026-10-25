@@ -1934,6 +1934,22 @@ function Get-CmdWhereMsgs($data, [double]$since) {
     }
     return @()
 }
+$script:NegRe = '(?:признак\w*|след\w*|связ\w*|поля|поле|данн\w*|функци\w*|способа|настройк\w*|таблиц\w*|записей|ничего|нигде)\s+(?:\S+\s+){0,3}нет\b|\bне\s+(?:найден\w*|существует|нашёл|нашел|поддерживается)|\bотсутствует\b|\bнигде\s+нет\b'
+$script:CoverRe = 'охват\s*:|\b\d+\s+из\s+\d+\b|\bвсего\s+\d+|\bвсе\s+\d+\s+\S+\s+(?:проверен|просмотрен)'
+$script:NegMsg = 'В ответе есть «нет / не найдено / не существует», а охвата проверки не названо. «Нет» говорят только после полного обхода: сколько всего (таблиц, файлов, полей, страниц документации) и сколько проверено. Допиши строку «Охват: проверил N из M <чего>; не смотрел: <что>». N < M — вместо «нет» написать «в проверенном N из M не нашёл», доделать проверку остального (поиск по всей базе/коду целиком, не по оглавлению; документация и инструкции приложения, а не только свои) и только потом отвечать. Переделай ответ.'
+function Get-AbsenceMsgs($data, [double]$since) {
+    # Отрицание («нет», «не найдено») — только с охватом: сколько всего и сколько проверено.
+    $path = [string](Get-Prop $data 'transcript_path')
+    $ans = [string](Get-LastAnswer $path $since)
+    if ((-not $ans) -or (-not [regex]::IsMatch($ans, $script:NegRe, 'IgnoreCase'))) { return @() }
+    if ([regex]::IsMatch($ans, $script:CoverRe, 'IgnoreCase')) {
+        $part = @([regex]::Matches($ans, '\b(\d+)\s+из\s+(\d+)\b') | Where-Object { [int]$_.Groups[1].Value -lt [int]$_.Groups[2].Value })
+        if (($part.Count -eq 0) -or [regex]::IsMatch($ans, 'не\s+смотрел|в\s+проверенн', 'IgnoreCase')) { return @() }
+    }
+    $tt = Get-TurnTools $path $since
+    if (@($tt.uses).Count -eq 0) { return @() }
+    return @($script:NegMsg)
+}
 function Get-CodeCheckMsgs($data, [string]$root, [double]$since) {
     # Код правился — свод проверен одной командой (скилл code-check).
     if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path (Join-Path $root '.claude') 'skills') 'code-check') 'check.ps1'))) { return @() }
@@ -1960,11 +1976,11 @@ function Invoke-CheckDocs($data) {
     $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
     if (Test-FastTurn $snap) {
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CmdWhereMsgs $data $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) }
+        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CmdWhereMsgs $data $since) + @(Get-AbsenceMsgs $data $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) }
         if ($fm.Count -gt 0) { Out-StopBlock $data $snap @('Перед завершением: ' + ($fm -join ' ')) $again }
         return
     }
-    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CmdWhereMsgs $data $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
+    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CmdWhereMsgs $data $since) + @(Get-AbsenceMsgs $data $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
     $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {

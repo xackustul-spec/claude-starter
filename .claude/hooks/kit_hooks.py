@@ -2463,6 +2463,28 @@ def cmd_where_msgs(data, since):
     return []
 
 
+NEG_RE = re.compile(r'(?:признак\w*|след\w*|связ\w*|поля|поле|данн\w*|функци\w*|способа|настройк\w*|таблиц\w*|записей|ничего|нигде)\s+(?:\S+\s+){0,3}нет\b|\bне\s+(?:найден\w*|существует|нашёл|нашел|поддерживается)|\bотсутствует\b|\bнигде\s+нет\b', re.I)
+COVER_RE = re.compile(r'охват\s*:|\b\d+\s+из\s+\d+\b|\bвсего\s+\d+|\bвсе\s+\d+\s+\S+\s+(?:проверен|просмотрен)', re.I)
+NEG_MSG = ('В ответе есть «нет / не найдено / не существует», а охвата проверки не названо. «Нет» говорят только после полного обхода: '
+           'сколько всего (таблиц, файлов, полей, страниц документации) и сколько проверено. Допиши строку «Охват: проверил N из M <чего>; '
+           'не смотрел: <что>». N < M — вместо «нет» написать «в проверенном N из M не нашёл», доделать проверку остального (поиск по всей '
+           'базе/коду целиком, не по оглавлению; документация и инструкции приложения, а не только свои) и только потом отвечать. Переделай ответ.')
+
+
+def absence_msgs(data, since):
+    # Отрицание («нет», «не найдено») — только с охватом: сколько всего и сколько проверено.
+    path = str(data.get('transcript_path') or '')
+    ans = last_answer(path, since)
+    if not ans or not NEG_RE.search(ans):
+        return []
+    if COVER_RE.search(ans):
+        part = [m for m in re.finditer(r'\b(\d+)\s+из\s+(\d+)\b', ans) if int(m.group(1)) < int(m.group(2))]
+        if not part or re.search(r'не\s+смотрел|в\s+проверенн', ans, re.I):
+            return []
+    uses, _, _ = turn_tools(path, since)
+    return [NEG_MSG] if uses else []
+
+
 def code_check_msgs(data, root, since):
     # Код правился — свод проверен одной командой (скилл code-check), а не «на глаз».
     if not os.path.isfile(os.path.join(root, '.claude', 'skills', 'code-check', 'check.py')):
@@ -2495,13 +2517,13 @@ def check_docs(data):
     again = data.get('stop_hook_active') is True
     if fast_turn(snap):
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since) + wait_msgs(data, root, since) + cmd_where_msgs(data, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since)
+        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since) + wait_msgs(data, root, since) + cmd_where_msgs(data, since) + absence_msgs(data, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since)
         if msgs:
             stop_block(data, snap, ['Перед завершением: ' + ' '.join(msgs)], again)
         return
     # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
     task_msgs = (main_task_check(data, root, since) + ui_check_msgs(data, root, since)
-                 + ([] if again else where_msgs(data, since) + wait_msgs(data, root, since) + cmd_where_msgs(data, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
+                 + ([] if again else where_msgs(data, since) + wait_msgs(data, root, since) + cmd_where_msgs(data, since) + absence_msgs(data, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
                     + lessons_block_msgs(data, root)))
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:
