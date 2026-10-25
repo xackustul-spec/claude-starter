@@ -1919,6 +1919,21 @@ function Get-WaitMsgs($data, [string]$root, [double]$since) {
     if ([regex]::IsMatch($tail, 'жду\s+от\s+вас\s*:', 'IgnoreCase')) { return @() }
     return @($script:WaitMsg)
 }
+$script:CmdWhereMsg = 'В ответе есть команда для владельца без подписи, где и в чём её выполнить. Перед КАЖДЫМ блоком с командой — одна строка «На <где: компьютер, сервер, ПК клуба>, <в чём: PowerShell, cmd, Git Bash, SSH, psql, терминал Claude Code>», например «На компе FP-KOM-SRV, PowerShell», и сразу под ней команда. Не «выполните в консоли». Переделай ответ.'
+function Get-CmdWhereMsgs($data, [double]$since) {
+    # Команда владельцу — всегда с подписью «На <где>, <в чём>» строкой выше.
+    $ans = [string](Get-LastAnswer ([string](Get-Prop $data 'transcript_path')) $since)
+    if ((-not $ans) -or (-not $ans.Contains('```'))) { return @() }
+    $word = '^\s*(?:PS [^>\n]*>\s*)?(?:sudo\s+)?(?:git|cd|ssh|scp|docker|kubectl|python3?|py|pip3?|npm|npx|node|curl|wget|powershell|pwsh|cmd|schtasks|sc|net|systemctl|service|psql|sqlcmd|winget|choco|apt(?:-get)?|chmod|mkdir|cp|mv|rm|tar|bash|sh|\.[/\\]\S+|[A-Z][a-z]+-[A-Z][A-Za-z]+)\b'
+    foreach ($m in [regex]::Matches($ans, '```[a-zA-Z]*\n(.*?)```', 'Singleline')) {
+        if (-not [regex]::IsMatch($m.Groups[1].Value, $word, 'Multiline')) { continue }
+        $lines = @($ans.Substring(0, $m.Index) -split "`n" | Where-Object { $_.Trim() })
+        if ($lines.Count -eq 0) { return @($script:CmdWhereMsg) }
+        $h = $lines[$lines.Count - 1].Trim()
+        if (($h.Length -gt 140) -or (-not [regex]::IsMatch($h, '^\W*на\s+\S[^\n]*,\s*\S[^\n]*$', 'IgnoreCase'))) { return @($script:CmdWhereMsg) }
+    }
+    return @()
+}
 function Get-CodeCheckMsgs($data, [string]$root, [double]$since) {
     # Код правился — свод проверен одной командой (скилл code-check).
     if (-not [System.IO.File]::Exists((Join-Path (Join-Path (Join-Path (Join-Path $root '.claude') 'skills') 'code-check') 'check.ps1'))) { return @() }
@@ -1945,11 +1960,11 @@ function Invoke-CheckDocs($data) {
     $again = ((Get-Prop $data 'stop_hook_active') -eq $true)
     if (Test-FastTurn $snap) {
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) }
+        $fm = @(); if (-not $again) { $fm = @(@(Get-CloneClaimMsgs $data $root $since) | Where-Object { $_ -ne $script:CloneDeliverMsg }) + @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CmdWhereMsgs $data $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) }
         if ($fm.Count -gt 0) { Out-StopBlock $data $snap @('Перед завершением: ' + ($fm -join ' ')) $again }
         return
     }
-    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
+    $lessonMsgs = @(); if (-not $again) { $lessonMsgs = @(Get-WhereMsgs $data $since) + @(Get-WaitMsgs $data $root $since) + @(Get-CmdWhereMsgs $data $since) + @(Get-CodeCheckMsgs $data $root $since) + @(Get-PlaceMsgs $data $snap $since) + @(Get-LayoutMeasureMsgs $data $root $since) + @(Get-CloneClaimMsgs $data $root $since) + @(Get-LessonsBlockMsgs $data $root) }
     $taskMsgs = @(Get-MainTaskCheck $data $root $since) + @(Get-UiCheckMsgs $data $root $since) + $lessonMsgs
     $head = Invoke-Git $root @('rev-parse', 'HEAD')
     if ($null -eq $head) {

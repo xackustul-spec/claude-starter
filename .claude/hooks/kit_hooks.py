@@ -2441,6 +2441,28 @@ def wait_msgs(data, root, since):
     return [WAIT_MSG]
 
 
+CMD_BLOCK_RE = re.compile(r'```[a-zA-Z]*\n(.*?)```', re.S)
+CMD_WORD_RE = re.compile(r'^\s*(?:PS [^>\n]*>\s*)?(?:sudo\s+)?(?:git|cd|ssh|scp|docker|kubectl|python3?|py|pip3?|npm|npx|node|curl|wget|powershell|pwsh|cmd|schtasks|sc|net|systemctl|service|psql|sqlcmd|winget|choco|apt(?:-get)?|chmod|mkdir|cp|mv|rm|tar|bash|sh|\.[/\\]\S+|[A-Z][a-z]+-[A-Z][A-Za-z]+)\b', re.M)
+CMD_HEAD_RE = re.compile(r'^\W*на\s+\S[^\n]*,\s*\S[^\n]*$', re.I)
+CMD_WHERE_MSG = ('В ответе есть команда для владельца без подписи, где и в чём её выполнить. Перед КАЖДЫМ блоком с командой — одна '
+                 'строка «На <где: компьютер, сервер, ПК клуба>, <в чём: PowerShell, cmd, Git Bash, SSH, psql, терминал Claude Code>», '
+                 'например «На компе FP-KOM-SRV, PowerShell», и сразу под ней команда. Не «выполните в консоли». Переделай ответ.')
+
+
+def cmd_where_msgs(data, since):
+    # Команда владельцу — всегда с подписью «На <где>, <в чём>» строкой выше.
+    ans = last_answer(str(data.get('transcript_path') or ''), since)
+    if not ans or '```' not in ans:
+        return []
+    for m in CMD_BLOCK_RE.finditer(ans):
+        if not CMD_WORD_RE.search(m.group(1)):
+            continue
+        head = [l for l in ans[:m.start()].splitlines() if l.strip()]
+        if not head or len(head[-1]) > 140 or not CMD_HEAD_RE.match(head[-1].strip()):
+            return [CMD_WHERE_MSG]
+    return []
+
+
 def code_check_msgs(data, root, since):
     # Код правился — свод проверен одной командой (скилл code-check), а не «на глаз».
     if not os.path.isfile(os.path.join(root, '.claude', 'skills', 'code-check', 'check.py')):
@@ -2473,13 +2495,13 @@ def check_docs(data):
     again = data.get('stop_hook_active') is True
     if fast_turn(snap):
         # Быстрый режим: единственное, что не пропускается, — слова о совпадении с эталоном без доказательства.
-        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since) + wait_msgs(data, root, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since)
+        msgs = [] if again else [m for m in clone_claim_msgs(data, root, since) if m != CLONE_DELIVER_MSG] + where_msgs(data, since) + wait_msgs(data, root, since) + cmd_where_msgs(data, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since)
         if msgs:
             stop_block(data, snap, ['Перед завершением: ' + ' '.join(msgs)], again)
         return
     # На повторном проходе проверяются только проверяющий и главная задача: их нельзя «пересидеть».
     task_msgs = (main_task_check(data, root, since) + ui_check_msgs(data, root, since)
-                 + ([] if again else where_msgs(data, since) + wait_msgs(data, root, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
+                 + ([] if again else where_msgs(data, since) + wait_msgs(data, root, since) + cmd_where_msgs(data, since) + code_check_msgs(data, root, since) + place_msgs(data, snap, since) + layout_measure_msgs(data, root, since) + clone_claim_msgs(data, root, since)
                     + lessons_block_msgs(data, root)))
     head = git(root, 'rev-parse', 'HEAD')
     if head is None:

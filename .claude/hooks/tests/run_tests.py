@@ -675,6 +675,12 @@ def scenarios(impl, ps, tmp):
     turn_with([tx('Готово.\n\nЖду от вас: выкладывать ли исправление подсчёта «истекает» на боевой.')])
     S('быстро: «Жду от вас» в конце ответа — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
     write(r, 'docs/ai/STATE.md', st_old)
+    S('быстро: начало хода 1д', 'turn-start', dict(d10t, prompt='останови синхронизацию'), r, 'allow', env=FAST)
+    turn_with([tx('Остановите задачу:\n```\nschtasks /End /TN club-crm-sync\n```')])
+    S('команда владельцу без «На <где>, <в чём>» — вернуть', 'check-docs', d10t, r, 'block', 'На <где', env=FAST)
+    S('быстро: начало хода 1е', 'turn-start', dict(d10t, prompt='останови синхронизацию'), r, 'allow', env=FAST)
+    turn_with([tx('Остановите задачу.\n\nНа компе FP-KOM-SRV, PowerShell\n```\nschtasks /End /TN club-crm-sync\n```')])
+    S('команда с подписью «На компе …, PowerShell» — молчит', 'check-docs', d10t, r, 'allow', env=FAST)
     # «куда поставить»: подсказка в начале, строка «Положение: … ✓» с замером в конце
     S('место: «блок над записью» — подсказка', 'turn-start', dict(d10t, prompt='поставь блок поиска над записью на тренировки'), r, 'ctx', 'Положение:', env=FAST)
     turn_with([tu('Edit', {'file_path': r + '/app/reception.html', 'old_string': 'a', 'new_string': 'b'}), tx('Блок перенесён. Где смотреть: /reception — уже там.')])
